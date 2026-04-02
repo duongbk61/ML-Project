@@ -1,4 +1,5 @@
 import abc
+import pathlib
 
 import numpy as np
 
@@ -114,3 +115,36 @@ class QLearningAgent(Agent):
         self.state = next_state
         self.action = next_action
         return next_action
+
+    def save(self, file_path: str | pathlib.Path) -> None:
+        """Save the Q-table and state bins to a .npz file."""
+        path = pathlib.Path(file_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            path,
+            q_table=self._q,
+            state_bins_0=self._state_bins[0],
+            state_bins_1=self._state_bins[1],
+            state_bins_2=self._state_bins[2],
+            state_bins_3=self._state_bins[3],
+        )
+        print(f"Model saved to {path}")
+
+    @classmethod
+    def load(cls, file_path: str | pathlib.Path) -> "QLearningAgent":
+        """Load a trained agent from a .npz file."""
+        data = np.load(file_path)
+        agent = cls()
+        agent._q = data["q_table"]
+        agent._state_bins = [
+            data["state_bins_0"],
+            data["state_bins_1"],
+            data["state_bins_2"],
+            data["state_bins_3"],
+        ]
+        agent._max_bins = max(len(b) for b in agent._state_bins)
+        agent._num_states = agent._q.shape[0]
+        agent._num_actions = agent._q.shape[1]
+        agent.exploration_rate = 0.0  # No exploration during replay
+        print(f"Model loaded from {file_path}")
+        return agent

@@ -10,18 +10,19 @@ from cartpole.agents import Agent, QLearningAgent
 from cartpole.entities import Action, EpisodeHistory, EpisodeHistoryRecord, Observation, Reward
 
 
-def run_agent(agent: Agent, env: gym.Env, verbose: bool = False) -> EpisodeHistory:
+def run_agent(agent: Agent, env: gym.Env, verbose: bool = False, max_episodes: int = 100) -> EpisodeHistory:
     """
     Run an intelligent cartpole agent in a cartpole environment,
     capturing the episode history.
     """
 
-    max_episodes_to_run = 5000
+    max_episodes_to_run = max_episodes
     max_timesteps_per_episode = 200
+    terminate_penalty = 5000
 
     # The environment is solved if we can survive for avg. 195 timesteps across 100 episodes.
     goal_avg_episode_length = 195
-    goal_consecutive_episodes = 100
+    goal_consecutive_episodes = 30
 
     episode_history = EpisodeHistory(
         max_timesteps_per_episode=200,
@@ -58,7 +59,7 @@ def run_agent(agent: Agent, env: gym.Env, verbose: bool = False) -> EpisodeHisto
                 # If the episode has ended prematurely, penalize the agent.
                 is_successful = timestep_index >= max_timesteps_per_episode - 1
                 if terminated and not is_successful:
-                    reward = float(-max_episodes_to_run)
+                    reward = float(-terminate_penalty)
 
                 # Get the next action from the learner, given our new state.
                 action = agent.act(observation, reward)
@@ -139,21 +140,61 @@ def save_history(history: EpisodeHistory, experiment_dir: str) -> pathlib.Path:
     return file_path
 
 
+SEEDS = [0, 1, 2]
+
+
 def main() -> None:
-    verbose = len(sys.argv) > 1 and sys.argv[1] == "--verbose"
-    random_state = np.random.default_rng(seed=0)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--episodes", type=int, default=100)
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args()
 
-    env = gym.make("CartPole-v1", render_mode="human" if verbose else None)
-    agent = QLearningAgent(
-        learning_rate=0.05,
-        discount_factor=0.95,
-        exploration_rate=0.5,
-        exploration_decay_rate=0.99,
-        random_state=random_state,
-    )
+    out_dir = f"experiment-results/ep{args.episodes}"
 
-    episode_history = run_agent(agent=agent, env=env, verbose=verbose)
-    save_history(episode_history, experiment_dir="experiment-results")
+    all_lengths = []
+    for seed in SEEDS:
+        print(f"\n--- Baseline seed={seed} ---")
+        random_state = np.random.default_rng(seed=seed)
+        env = gym.make("CartPole-v1", render_mode="human" if args.verbose else None)
+        agent = QLearningAgent(
+            learning_rate=0.05,
+            discount_factor=0.95,
+            exploration_rate=0.5,
+            exploration_decay_rate=0.99,
+            random_state=random_state,
+        )
+        episode_history = run_agent(agent=agent, env=env, verbose=args.verbose,
+                                    max_episodes=args.episodes)
+        env.close()
+
+        # Save per-seed files
+        save_history(episode_history, experiment_dir=out_dir)
+        # Rename to seed-specific file
+        src = pathlib.Path(out_dir) / "episode_history.csv"
+        dst = pathlib.Path(out_dir) / f"baseline_s{seed}_history.csv"
+        if dst.exists():
+            dst.unlink()
+        src.rename(dst)
+        agent.save(f"{out_dir}/baseline_s{seed}_model.npz")
+
+        lengths = [r.episode_length for r in episode_history.all_records()]
+        all_lengths.append(lengths)
+        mean_last30 = pd.Series(lengths).tail(30).mean()
+        print(f"  seed={seed}: mean={pd.Series(lengths).mean():.1f}, last-30={mean_last30:.1f}")
+
+    # Also save seed-0 copy as canonical baseline_model.npz / episode_history.csv
+    # so downstream scripts that expect the old filenames still work
+    import shutil
+    shutil.copy(f"{out_dir}/baseline_s0_history.csv", f"{out_dir}/episode_history.csv")
+    shutil.copy(f"{out_dir}/baseline_s0_model.npz",   f"{out_dir}/baseline_model.npz")
+
+    # Cross-seed summary
+    means = [pd.Series(l).mean() for l in all_lengths]
+    last30s = [pd.Series(l).tail(30).mean() for l in all_lengths]
+    print(f"\nBaseline ({len(SEEDS)} seeds):")
+    print(f"  Overall mean : {pd.Series(means).mean():.1f} ± {pd.Series(means).std():.1f}")
+    print(f"  Last-30 avg  : {pd.Series(last30s).mean():.1f} ± {pd.Series(last30s).std():.1f}")
 
 
 if __name__ == "__main__":
