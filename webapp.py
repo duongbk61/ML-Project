@@ -30,6 +30,7 @@ from cartpole.agents import QLearningAgent
 app = Flask(__name__)
 app.config["PROPAGATE_EXCEPTIONS"] = True
 RESULTS_DIR = pathlib.Path("experiment-results")
+EP_FILTER = "ep200"  # Only show results from this episode count
 
 
 @app.after_request
@@ -108,6 +109,11 @@ def scan_models() -> list[dict]:
             continue
         rel = npz.relative_to(RESULTS_DIR)
         ep = next((p for p in rel.parts if re.match(r"ep\d+$", p)), "misc")
+
+        # Only show models matching our filter
+        if ep != EP_FILTER:
+            continue
+
         category = npz.parent.name if npz.parent.name != RESULTS_DIR.name else "root"
         models.append({
             "path":     str(npz).replace("\\", "/"),
@@ -346,6 +352,11 @@ def scan_csvs() -> list[dict]:
             continue
         rel = p.relative_to(RESULTS_DIR)
         ep = next((part for part in rel.parts if re.match(r"ep\d+$", part)), "misc")
+
+        # Only show history files matching our filter
+        if ep != EP_FILTER:
+            continue
+
         category = p.parent.name if p.parent.name != RESULTS_DIR.name else "root"
         csvs.append({
             "path":     str(p).replace("\\", "/"),
