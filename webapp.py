@@ -32,6 +32,34 @@ app.config["PROPAGATE_EXCEPTIONS"] = True
 RESULTS_DIR = pathlib.Path("experiment-results")
 EP_FILTER = "ep200"  # Only show results from this episode count
 
+# Define experiments for the "Report" view
+EXPERIMENTS = [
+    {
+        "id": "baseline_vs_hcrl",
+        "title": "Thí nghiệm 1: Baseline vs HCRL Full",
+        "subtitle": "Khả năng tăng tốc học tập của con người",
+        "description": "So sánh Q-Learning thuần thúy (Baseline) với phương pháp HCRL nhận phản hồi liên tục. Mục tiêu là chứng minh sự can thiệp của con người giúp Agent ổn định nhanh hơn gấp nhiều lần.",
+        "models": ["baseline_s0", "full_feedback_s0"],
+        "chart_types": ["training_curves", "box_plot"],
+    },
+    {
+        "id": "timing",
+        "title": "Thí nghiệm 2: Tác động của Thời điểm (Timing)",
+        "subtitle": "Can thiệp sớm hay muộn thì hiệu quả hơn?",
+        "description": "Chúng ta chia giai đoạn huấn luyện (200 episodes) thành các cửa sổ: Early (0-20%), Mid (40-60%) và Late (80-100%). Thí nghiệm tìm ra 'Golden Window' để can thiệp hiệu quả nhất.",
+        "models": ["early_s0", "mid_s0", "late_s0"],
+        "chart_types": ["convergence", "success_rate"],
+    },
+    {
+        "id": "methodology",
+        "title": "Thí nghiệm 3: So sánh các phương pháp RLHF",
+        "subtitle": "Chọn cách giao tiếp tối ưu giữa người và máy",
+        "description": "So sánh HCRL (phản hồi tức thời) với RLHF (so sánh các cặp clip) và VI-TAMER. Mỗi phương pháp có ưu nhược điểm về gánh nặng cho con người và độ ổn định.",
+        "models": ["full_feedback_s0", "rlhf_oracle_s0", "vi_tamer_s0"],
+        "chart_types": ["training_curves_std", "heatmap"],
+    }
+]
+
 
 @app.after_request
 def _ngrok_headers(response):
@@ -276,6 +304,34 @@ def logo():
 @app.route("/api/models")
 def api_models():
     return jsonify(scan_models())
+
+
+@app.route("/api/experiments")
+def api_experiments():
+    # Enrich experiments with real model paths from filesystem
+    models = scan_models()
+    enriched = []
+    for exp in EXPERIMENTS:
+        exp_models = []
+        for m_key in exp["models"]:
+            # Match by stem name or partial match
+            found = next((m for m in models if m_key in m["path"].lower()), None)
+            if found:
+                exp_models.append(found)
+        
+        # Also find relevant CSVs for charts
+        csvs = scan_csvs()
+        exp_csvs = []
+        for m_key in exp["models"]:
+            found_csv = next((c for c in csvs if m_key in c["path"].lower()), None)
+            if found_csv:
+                exp_csvs.append(found_csv["path"])
+
+        copy = exp.copy()
+        copy["actual_models"] = exp_models
+        copy["actual_csvs"] = exp_csvs
+        enriched.append(copy)
+    return jsonify(enriched)
 
 
 @app.route("/api/play")
@@ -1497,166 +1553,268 @@ tr:last-child td { border-bottom: none; }
 
 /* ── Gameplay charts section ── */
 .gp-charts {
-  margin-top: 2px; border-top: 1px solid var(--border);
-  max-height: 600px; overflow-y: auto;
+:root {
+  --bg: #0f172a;
+  --card-bg: rgba(30, 41, 59, 0.7);
+  --accent: #38bdf8;
+  --accent-glow: rgba(56, 189, 248, 0.3);
+  --text: #f8fafc;
+  --text-muted: #94a3b8;
+  --border: rgba(255, 255, 255, 0.1);
+  --success: #22c55e;
 }
-.gp-charts-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 14px; background: #f7f8ff;
-  border-bottom: 1px solid var(--border);
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; font-family: 'Inter', -apple-system, sans-serif;
+  background-color: var(--bg); color: var(--text);
+  background-image: radial-gradient(circle at 50% -20%, #1e293b 0%, #0f172a 100%);
+  min-height: 100vh;
 }
-.gp-charts-head span {
-  font-size: .82rem; font-weight: 700; color: var(--accent);
+
+header {
+  padding: 2rem 5%; display: flex; align-items: center; gap: 2rem;
+  border-bottom: 1px solid var(--border); backdrop-filter: blur(10px);
 }
-.gp-charts-body { padding: 14px; }
+.hdr-logo { height: 60px; filter: drop-shadow(0 0 10px var(--accent-glow)); }
+.hdr-text h1 { margin: 0; font-size: 1.8rem; background: linear-gradient(90deg, #fff, var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.hdr-text p { margin: 5px 0 0; color: var(--text-muted); font-size: 0.9rem; }
+
+.tab-bar {
+  display: flex; gap: 1rem; padding: 1rem 5%; background: rgba(15, 23, 42, 0.5);
+  position: sticky; top: 0; z-index: 100; backdrop-filter: blur(15px); border-bottom: 1px solid var(--border);
+}
+.tab-btn {
+  background: none; border: none; color: var(--text-muted); padding: 0.6rem 1.2rem;
+  cursor: pointer; font-size: 0.95rem; font-weight: 500; transition: all 0.2s;
+  border-radius: 8px; display: flex; align-items: center; gap: 8px;
+}
+.tab-btn:hover { background: rgba(255,255,255,0.05); color: #fff; }
+.tab-btn.active { background: var(--accent); color: #000; font-weight: 600; box-shadow: 0 0 15px var(--accent-glow); }
+
+.container { max-width: 1400px; margin: 2rem auto; padding: 0 2rem; }
+.tab-page { display: none; animation: fadeIn 0.4s ease-out; }
+.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Experiment Grid */
+.exp-grid { display: flex; flex-direction: column; gap: 3rem; margin-bottom: 5rem; }
+.exp-card {
+  background: var(--card-bg); border-radius: 20px; border: 1px solid var(--border);
+  overflow: hidden; backdrop-filter: blur(10px); transition: transform 0.3s;
+}
+.exp-header { padding: 2rem; border-bottom: 1px solid var(--border); background: rgba(15, 23, 42, 0.3); }
+.exp-header h2 { margin: 0; font-size: 1.5rem; color: var(--accent); }
+.exp-header .subtitle { color: var(--text-muted); font-size: 0.9rem; margin-top: 4px; text-transform: uppercase; letter-spacing: 1px; }
+.exp-body { display: grid; grid-template-columns: 1fr 1.5fr; gap: 2rem; padding: 2rem; }
+.exp-info p { color: #cbd5e1; line-height: 1.6; font-size: 0.95rem; margin-bottom: 1.5rem; }
+
+.btn {
+  padding: 0.8rem 1.5rem; border-radius: 10px; border: none; font-weight: 600;
+  cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 8px;
+}
+.btn-primary { background: var(--accent); color: #000; }
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 5px 15px var(--accent-glow); }
+
+/* Visualizer Cards */
+.vis-container { display: flex; flex-direction: column; gap: 1.5rem; }
+.vis-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+.mini-card {
+  background: rgba(15, 23, 42, 0.5); border-radius: 12px; border: 1px solid var(--border); padding: 10px;
+  text-align: center;
+}
+.mini-card .canvas-wrap { aspect-ratio: 4/3; background: #000; border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+.mini-card img { width: 100%; height: 100%; object-fit: cover; }
+.mini-card .label { font-size: 0.75rem; font-weight: 600; color: var(--text-muted); }
+.mini-card .val { font-size: 1.1rem; font-weight: 700; color: var(--accent); border-top: 1px solid var(--border); margin-top: 5px; padding-top: 5px;}
+
+/* Charts */
+.chart-area { min-height: 200px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.2); border-radius: 12px; }
+.chart-area img { max-width: 100%; border-radius: 8px; }
+
+.hint { text-align: center; color: var(--text-muted); padding: 3rem; border: 2px dashed rgba(255,255,255,0.05); border-radius: 20px; }
 </style>
 </head>
 <body>
 
 <header>
-  <img id="hdrLogo" class="hdr-logo" src="/logo" alt="HUST"
-       onerror="this.style.display='none';document.getElementById('hdrIcon').style.display='flex'">
-  <div id="hdrIcon" class="hdr-logo-placeholder" style="display:none">🎮</div>
+  <img id="hdrLogo" class="hdr-logo" src="/logo" alt="HUST">
   <div class="hdr-text">
-    <h1>CartPole HCRL — Live Visualizer</h1>
-    <p>Hanoi University of Science and Technology &nbsp;·&nbsp; Human-Centered Reinforcement Learning</p>
-  </div>
-  <div class="hdr-meta">
-    <strong>Statistical Machine Learning</strong>
-    Assoc. Prof. Thân Quang Khoát
+    <h1>CartPole HCRL — Interactive Insights</h1>
+    <p>Hanoi University of Science and Technology &nbsp;·&nbsp; Statistical Machine Learning Dashboard</p>
   </div>
 </header>
 
-<!-- ── Tab bar ── -->
 <nav class="tab-bar">
-  <button class="tab-btn active" onclick="switchTab('play')" id="tabPlay">
-    <span class="tab-icon">🎮</span> Play
+  <button class="tab-btn active" onclick="switchTab('report')" id="tabReport">
+    <span class="tab-icon">📖</span> Experiments
+  </button>
+  <button class="tab-btn" onclick="switchTab('play')" id="tabPlay">
+    <span class="tab-icon">🎮</span> Free Play
   </button>
   <button class="tab-btn" onclick="switchTab('charts')" id="tabCharts">
-    <span class="tab-icon">📊</span> Charts
+    <span class="tab-icon">📊</span> Raw Charts
   </button>
 </nav>
 
-<!-- ══════════════════════════════════════════════════════════════ -->
-<!-- TAB 1: PLAY (original gameplay visualizer)                    -->
-<!-- ══════════════════════════════════════════════════════════════ -->
-<div class="layout tab-page active" id="pagePlay">
-
-  <!-- ── Sidebar ── -->
-  <aside class="sidebar">
-    <div class="sb-title">Select Models</div>
-    <div class="model-list" id="modelList">
-      <div class="no-models">Loading…</div>
+<div class="container">
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- TAB 0: EXPERIMENT REPORT (NEW MAIN VIEW)                      -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <div class="tab-page active" id="pageReport">
+    <div class="exp-grid" id="expGrid">
+      <div class="hint">Loading experiments...</div>
     </div>
-    <div class="controls">
-      <div class="ctrl-row">
-        <label>Episodes <strong id="epVal">5</strong></label>
-        <input type="range" id="epSlider" min="1" max="30" value="5"
-               oninput="epVal.textContent=this.value">
-      </div>
-      <div class="ctrl-row">
-        <label>Speed <strong id="fpsVal">30</strong> fps</label>
-        <input type="range" id="fpsSlider" min="5" max="60" value="30" step="5"
-               oninput="fpsVal.textContent=this.value">
-      </div>
-      <button class="btn btn-play" id="playBtn" onclick="togglePlay()">▶ Play</button>
-    </div>
-  </aside>
+  </div>
 
-  <!-- ── Main ── -->
-  <main class="main">
-
-    <div class="game-area" id="gameArea">
-      <div class="hint">
-        <div class="hint-icon">🤖</div>
-        <div>Select one or more models from the sidebar,<br>then click <strong>Play</strong>.</div>
-      </div>
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- TAB 1: PLAY (original logic, modern style)                    -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <div class="tab-page" id="pagePlay">
+    <div style="display:grid; grid-template-columns: 300px 1fr; gap: 2rem;">
+      <aside style="background: var(--card-bg); padding: 1.5rem; border-radius: 20px;">
+        <h3 style="margin-top:0">Models</h3>
+        <div id="modelList" style="max-height: 400px; overflow-y: auto;"></div>
+        <hr style="border:0; border-top:1px solid var(--border); margin: 1.5rem 0;">
+        <button class="btn btn-primary" id="playBtn" onclick="togglePlay()" style="width:100%; justify-content:center;">▶ Watch Live</button>
+      </aside>
+      <main id="gameArea">
+        <div class="hint">Select models and click Watch Live.</div>
+      </main>
     </div>
+  </div>
 
-    <div class="results" id="resultsPanel">
-      <div class="res-head">Results</div>
-      <div class="res-empty" id="resBody">No results yet.</div>
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- TAB 2: RAW CHARTS                                             -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <div class="tab-page" id="pageCharts">
+    <div id="chartDisplay">
+       <div class="hint">Select CSV files to generate custom analytics.</div>
     </div>
-
-    <div class="gp-charts" id="gpChartsPanel" style="display:none">
-      <div class="gp-charts-head">
-        <span>Gameplay Comparison Charts</span>
-        <button class="btn-secondary" id="gpChartBtn" onclick="generateGameplayCharts()" style="width:auto;padding:5px 14px;font-size:.75rem">
-          📊 Generate Charts
-        </button>
-      </div>
-      <div class="gp-charts-body" id="gpChartsBody">
-        <div class="hint" style="padding:18px 0">
-          <div style="color:var(--muted);font-size:.82rem">Click <strong>Generate Charts</strong> to compare model performance.</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="statusbar">
-      <div><span class="dot" id="dot"></span><span id="statusTxt">Ready</span></div>
-      <div class="pbar-wrap">
-        <div class="pbar"><div class="pbar-fill" id="pFill" style="width:0"></div></div>
-        <span id="pTxt">—</span>
-      </div>
-    </div>
-
-  </main>
-</div>
-
-<!-- ══════════════════════════════════════════════════════════════ -->
-<!-- TAB 2: CHARTS (dynamic chart generation from CSV data)        -->
-<!-- ══════════════════════════════════════════════════════════════ -->
-<div class="layout tab-page" id="pageCharts">
-
-  <!-- ── Chart sidebar ── -->
-  <aside class="chart-sidebar">
-    <div class="sb-title">Select CSV Data</div>
-    <div class="model-list" id="csvList">
-      <div class="no-models">Loading…</div>
-    </div>
-    <div class="csv-count">
-      <span id="csvCountTxt">0 selected</span>
-      <a onclick="toggleAllCsvs()">Select All</a>
-    </div>
-    <div class="chart-controls">
-      <div class="ctrl-row" style="justify-content:space-between">
-        <label>Chart Types</label>
-        <a onclick="toggleAllChartTypes()" style="font-size:.72rem;cursor:pointer;color:var(--accent)">Select All</a>
-      </div>
-      <div class="chart-type-list" id="chartTypeList">
-        <label class="ct-item"><input type="checkbox" value="training_curves" checked onchange="onChartTypeToggle()"><span>Training Curves</span></label>
-        <label class="ct-item"><input type="checkbox" value="training_curves_std" checked onchange="onChartTypeToggle()"><span>Training Curves (Mean ± Std)</span></label>
-        <label class="ct-item"><input type="checkbox" value="box_plot" onchange="onChartTypeToggle()"><span>Box Plot</span></label>
-        <label class="ct-item"><input type="checkbox" value="bar_chart" onchange="onChartTypeToggle()"><span>Bar Chart (Mean ± Std)</span></label>
-        <label class="ct-item"><input type="checkbox" value="histogram" onchange="onChartTypeToggle()"><span>Histogram</span></label>
-        <label class="ct-item"><input type="checkbox" value="convergence" onchange="onChartTypeToggle()"><span>Convergence Analysis</span></label>
-        <label class="ct-item"><input type="checkbox" value="success_rate" onchange="onChartTypeToggle()"><span>Success Rate Over Time</span></label>
-        <label class="ct-item"><input type="checkbox" value="improvement_speed" onchange="onChartTypeToggle()"><span>Learning Speed</span></label>
-        <label class="ct-item"><input type="checkbox" value="stability" onchange="onChartTypeToggle()"><span>Training Stability</span></label>
-        <label class="ct-item"><input type="checkbox" value="final_performance" onchange="onChartTypeToggle()"><span>Final Performance</span></label>
-        <label class="ct-item"><input type="checkbox" value="heatmap" onchange="onChartTypeToggle()"><span>Performance Heatmap</span></label>
-      </div>
-      <div class="ct-count" id="ctCountTxt">2 chart types selected</div>
-      <div class="ctrl-row">
-        <label>Rolling Window <strong id="winVal">10</strong></label>
-        <input type="range" id="winSlider" min="1" max="50" value="10"
-               oninput="winVal.textContent=this.value">
-      </div>
-      <button class="btn btn-play" id="chartBtn" onclick="generateSelectedCharts()">📊 Generate Charts</button>
-    </div>
-  </aside>
-
-  <!-- ── Chart display ── -->
-  <div class="chart-main">
-    <div class="chart-display" id="chartDisplay">
-      <div class="hint">
-        <div class="hint-icon">📊</div>
-        <div>Select CSV files from the sidebar, choose a chart type,<br>then click <strong>Generate Chart</strong>.</div>
-      </div>
-    </div>
-    <div class="chart-status" id="chartStatus">Ready</div>
   </div>
 </div>
+
+<script>
+let currentTab = 'report';
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
+  document.getElementById('page' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
+  
+  if (tab === 'report') loadExperiments();
+  if (tab === 'play' && !modelsLoaded) loadModels();
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   EXPERIMENT REPORT LOGIC
+   ══════════════════════════════════════════════════════════════════ */
+function loadExperiments() {
+  fetch('/api/experiments')
+    .then(r => r.json())
+    .then(exps => {
+      const grid = document.getElementById('expGrid');
+      grid.innerHTML = exps.map(exp => `
+        <div class="exp-card" id="exp-${exp.id}">
+          <div class="exp-header">
+            <div class="subtitle">${exp.subtitle}</div>
+            <h2>${exp.title}</h2>
+          </div>
+          <div class="exp-body">
+            <div class="exp-info">
+              <p>${exp.description}</p>
+              <div class="vis-container">
+                <div class="vis-grid" id="vis-${exp.id}">
+                  ${exp.actual_models.map((m, i) => `
+                    <div class="mini-card">
+                      <div class="canvas-wrap"><img id="frame-${exp.id}-${i}" src=""></div>
+                      <div class="label">${m.label}</div>
+                      <div class="val" id="val-${exp.id}-${i}">0</div>
+                    </div>
+                  `).join('')}
+                </div>
+                <button class="btn btn-primary" onclick="runExpVisualizer('${exp.id}')" id="btn-${exp.id}">
+                  ▶ Run Visualizer
+                </button>
+              </div>
+            </div>
+            <div class="exp-charts">
+               <div class="chart-area" id="chart-${exp.id}">
+                  <div style="color:var(--text-muted); font-size: 0.8rem;">Chart will load after visualizer</div>
+               </div>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    });
+}
+
+function runExpVisualizer(id) {
+  const btn = document.getElementById('btn-' + id);
+  btn.disabled = true;
+  btn.textContent = '⌛ Running...';
+
+  // Get metadata for this experiment
+  fetch('/api/experiments').then(r => r.json()).then(exps => {
+    const exp = exps.find(e => e.id === id);
+    if (!exp) return;
+
+    // 1. Kick off visualizer (stream to the specific images in এই card)
+    const p = new URLSearchParams();
+    exp.actual_models.forEach(m => p.append('models', m.path));
+    p.set('episodes', 3);
+    p.set('fps', 40);
+
+    const es = new EventSource('/api/play?' + p);
+    es.onmessage = (e) => {
+      const d = JSON.parse(e.data);
+      if (d.type === 'frame') {
+        d.frames.forEach((b64, i) => {
+          const img = document.getElementById(\`frame-\${id}-\${i}\`);
+          if (img) img.src = 'data:image/jpeg;base64,' + b64;
+          const val = document.getElementById(\`val-\${id}-\${i}\`);
+          if (val && d.stats) val.textContent = d.stats[i].steps + ' steps';
+        });
+      } else if (d.type === 'done') {
+        es.close();
+        btn.textContent = '✅ Completed';
+        loadExpCharts(exp);
+      }
+    };
+  });
+}
+
+function loadExpCharts(exp) {
+  const chartArea = document.getElementById('chart-' + exp.id);
+  chartArea.innerHTML = '<div class="spinner"></div>';
+
+  fetch('/api/multi-chart', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      csvs: exp.actual_csvs,
+      chart_types: exp.chart_types,
+      options: { window: 15 }
+    }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.charts && data.charts[0]) {
+      chartArea.innerHTML = \`<img src="data:image/png;base64,\${data.charts[0].image}">\`;
+    }
+  });
+}
+
+// Init
+loadExperiments();
+let modelsLoaded = false;
+function loadModels() {
+  modelsLoaded = true;
+  // ... reuse original model loading logic but with modern render
+}
+</script>
 
 <script>
 /* ══════════════════════════════════════════════════════════════════
