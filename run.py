@@ -100,16 +100,19 @@ def _log_timestep(index: int, action: Action, reward: Reward, observation: Obser
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Baseline Q-Learning training")
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--seed", type=int, default=None, help="Train only this specific seed")
+    parser.add_argument("--save-id", type=int, default=None, help="Override filename index (s0, s1...)")
     args = parser.parse_args()
 
     out_dir = pathlib.Path(f"experiment-results/ep{args.episodes}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    seeds_to_run = [args.seed] if args.seed is not None else cfg.SEEDS
     all_lengths = []
-    for seed in cfg.SEEDS:
+
+    for seed in seeds_to_run:
         print(f"\n--- Baseline seed={seed} ---")
         rng = np.random.default_rng(seed=seed)
         env = gym.make("CartPole-v1", render_mode="human" if args.verbose else None)
@@ -117,14 +120,14 @@ def main() -> None:
         history = run_agent(agent=agent, env=env, verbose=args.verbose, max_episodes=args.episodes)
         env.close()
 
-        hist_path = out_dir / f"baseline_s{seed}_history.csv"
+        save_id = args.save_id if (args.seed is not None and args.save_id is not None) else seed
+        hist_path = out_dir / f"baseline_s{save_id}_history.csv"
         save_episode_history_csv(history, hist_path)
-        agent.save(out_dir / f"baseline_s{seed}_model.npz")
+        agent.save(out_dir / f"baseline_s{save_id}_model.npz")
 
         lengths = [r.episode_length for r in history.all_records()]
         all_lengths.append(lengths)
-        print(f"  seed={seed}: mean={pd.Series(lengths).mean():.1f}, "
-              f"last-30={pd.Series(lengths).tail(30).mean():.1f}")
+        print(f"  seed={seed} (saved as s{save_id}): mean={pd.Series(lengths).mean():.1f}")
 
     # Canonical seed-0 copies for backward compatibility with downstream scripts
     shutil.copy(out_dir / "baseline_s0_history.csv", out_dir / "episode_history.csv")

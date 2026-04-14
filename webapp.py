@@ -38,25 +38,25 @@ EXPERIMENTS = [
         "id": "baseline_vs_hcrl",
         "title": "Thí nghiệm 1: Baseline vs HCRL Full",
         "subtitle": "Khả năng tăng tốc học tập của con người",
-        "description": "So sánh Q-Learning thuần thúy (Baseline) với phương pháp HCRL nhận phản hồi liên tục. Mục tiêu là chứng minh sự can thiệp của con người giúp Agent ổn định nhanh hơn gấp nhiều lần.",
-        "models": ["baseline_s0", "full_feedback_s0"],
+        "description": "So sánh Q-Learning thuần thúy (Baseline) với phương pháp HCRL nhận phản hồi từ Oracle và Human. Mục tiêu là chứng minh sự can thiệp của con người giúp Agent ổn định nhanh hơn.",
+        "models": ["baseline_s0", "full_feedback_s0", "hcrl_human_s0"],
         "chart_types": ["training_curves", "box_plot"],
     },
     {
         "id": "timing",
         "title": "Thí nghiệm 2: Tác động của Thời điểm (Timing)",
         "subtitle": "Can thiệp sớm hay muộn thì hiệu quả hơn?",
-        "description": "Chúng ta chia giai đoạn huấn luyện (200 episodes) thành các cửa sổ: Early (0-20%), Mid (40-60%) và Late (80-100%). Thí nghiệm tìm ra 'Golden Window' để can thiệp hiệu quả nhất.",
+        "description": "Chúng ta chia giai đoạn huấn luyện thành các cửa sổ: Early (0-20%), Mid (40-60%) và Late (80-100%). Thí nghiệm tìm ra 'Golden Window' để can thiệp hiệu quả nhất.",
         "models": ["early_s0", "mid_s0", "late_s0"],
         "chart_types": ["convergence", "success_rate"],
     },
     {
-        "id": "methodology",
-        "title": "Thí nghiệm 3: So sánh các phương pháp RLHF",
-        "subtitle": "Chọn cách giao tiếp tối ưu giữa người và máy",
-        "description": "So sánh HCRL (phản hồi tức thời) với RLHF (so sánh các cặp clip) và VI-TAMER. Mỗi phương pháp có ưu nhược điểm về gánh nặng cho con người và độ ổn định.",
-        "models": ["full_feedback_s0", "rlhf_oracle_s0", "vi_tamer_s0"],
-        "chart_types": ["training_curves_std", "heatmap"],
+        "id": "weight_sensitivity",
+        "title": "Thí nghiệm 3: Độ nhạy của Trọng số (Weight Sensitivity)",
+        "subtitle": "Trọng số feedback bao nhiêu là tối ưu?",
+        "description": "So sánh tác động của giá trị phần thưởng từ con người (Feedback Weight) ở các mức 5, 20, và 50. Thí nghiệm này kiểm tra xem việc tăng cường độ tín hiệu khen/chê có giúp model học nhanh hơn không.",
+        "models": ["fw5/hcrl_oracle_s0", "fw20/hcrl_oracle_s0", "fw50/hcrl_oracle_s0"],
+        "chart_types": ["training_curves", "box_plot"],
     }
 ]
 
@@ -97,6 +97,13 @@ def make_label(npz: pathlib.Path) -> str:
     m = re.match(r"w(\d+)_s(\d+)$", stem)
     if m:
         return f"Weight={m.group(1)} s{m.group(2)}{ep_tag}"
+
+    # Handle fw in parent directory (e.g. hcrl-oracle-fw20)
+    fw_match = re.search(r"fw(\d+)", str(npz))
+    seed_match = re.search(r"_s(\d+)", stem)
+    if fw_match:
+        s_tag = f" s{seed_match.group(1)}" if seed_match else ""
+        return f"Weight={fw_match.group(1)}{s_tag}{ep_tag}"
 
     # early_s0  →  Early (0-20%) s0 (ep200)
     m = re.match(r"(early|mid|late|full_feedback)_s(\d+)$", stem)
@@ -468,6 +475,9 @@ _MODEL_STYLES: list[tuple[str, dict]] = [
     (r"full_feedback",      {"label": "HCRL Full Feedback",    "color": "red",        "linestyle": "-"}),
     (r"hcrl_oracle",        {"label": "HCRL Oracle",           "color": "darkgreen",  "linestyle": "-"}),
     (r"hcrl_human",         {"label": "HCRL Human",            "color": "limegreen",  "linestyle": "-."}),
+    (r"fw5",                {"label": "Weight = 5",            "color": "cyan",       "linestyle": "-"}),
+    (r"fw20",               {"label": "Weight = 20",           "color": "magenta",    "linestyle": "-"}),
+    (r"fw50",               {"label": "Weight = 50",           "color": "gold",       "linestyle": "-"}),
     (r"rlhf_oracle",        {"label": "RLHF Oracle",           "color": "darkorange", "linestyle": "-"}),
     (r"rlhf_ensemble",      {"label": "RLHF Ensemble",         "color": "brown",      "linestyle": "-"}),
     (r"rlhf_human",         {"label": "RLHF Human",            "color": "salmon",     "linestyle": "-."}),
@@ -479,9 +489,7 @@ _MODEL_STYLES: list[tuple[str, dict]] = [
 def _model_style(family_key: str, fallback_idx: int) -> dict:
     """Return {label, color, linestyle} for a family key."""
     # family_key looks like "ep100/timing-experiment/early_history"
-    # Extract the stem part after the last '/'
-    stem = family_key.rsplit("/", 1)[-1]  # e.g. "early_history"
-    stem = stem.replace("_history", "").replace("_episode", "")  # e.g. "early"
+    stem = family_key.replace("_history", "").replace("_episode", "")
     for pattern, style in _MODEL_STYLES:
         if re.search(pattern, stem):
             return style
@@ -1216,429 +1224,140 @@ _HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CartPole HCRL Visualizer</title>
+<title>CartPole HCRL — Interactive Insights</title>
 <style>
-:root {
-  --accent:      #4361ee;
-  --accent-dark: #3650d0;
-  --danger:      #e63946;
-  --success:     #2dc653;
-  --bg:          #f0f2f5;
-  --card-bg:     #ffffff;
-  --sidebar-bg:  #ffffff;
-  --border:      #e0e4ea;
-  --text:        #1a1d23;
-  --muted:       #6b7280;
-  --shadow:      0 1px 4px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.04);
-}
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: var(--bg); color: var(--text);
-  display: flex; flex-direction: column; height: 100vh; overflow: hidden;
-}
-
-/* ── Header ── */
-header {
-  background: var(--accent); color: #fff;
-  padding: 8px 20px; display: flex; align-items: center; gap: 14px;
-  box-shadow: 0 2px 8px rgba(67,97,238,.35); flex-shrink: 0; z-index: 10;
-}
-.hdr-logo {
-  height: 48px; width: 48px; object-fit: contain;
-  background: #fff; border-radius: 8px; padding: 3px; flex-shrink: 0;
-}
-.hdr-logo-placeholder {
-  width: 48px; height: 48px; background: rgba(255,255,255,.18);
-  border-radius: 8px; display: flex; align-items: center; justify-content: center;
-  font-size: 1.5rem; flex-shrink: 0;
-}
-.hdr-text { flex: 1; min-width: 0; }
-header h1  { font-size: 1.0rem; font-weight: 700; white-space: nowrap; }
-header p   { font-size: 0.72rem; opacity: .85; margin-top: 1px; }
-.hdr-meta {
-  text-align: right; flex-shrink: 0; font-size: .7rem; opacity: .85; line-height: 1.5;
-}
-.hdr-meta strong { display: block; font-size: .75rem; opacity: 1; }
-
-/* ── Tab bar ── */
-.tab-bar {
-  display: flex; background: #fff; border-bottom: 2px solid var(--border);
-  flex-shrink: 0; padding: 0 16px;
-}
-.tab-btn {
-  padding: 10px 24px; font-size: .85rem; font-weight: 700; cursor: pointer;
-  border: none; background: none; color: var(--muted);
-  border-bottom: 3px solid transparent; margin-bottom: -2px;
-  transition: all .15s; display: flex; align-items: center; gap: 6px;
-}
-.tab-btn:hover { color: var(--accent); }
-.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-.tab-icon { font-size: 1rem; }
-
-/* ── Two-column layout ── */
-.layout { display: flex; flex: 1; overflow: hidden; }
-.tab-page { display: none; flex: 1; overflow: hidden; }
-.tab-page.active { display: flex; }
-
-/* ── Sidebar ── */
-.sidebar {
-  width: 268px; background: var(--sidebar-bg);
-  border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; flex-shrink: 0;
-}
-.sb-title {
-  padding: 11px 16px 9px; font-size: .68rem; font-weight: 700;
-  color: var(--muted); text-transform: uppercase; letter-spacing: .09em;
-  border-bottom: 1px solid var(--border); flex-shrink: 0;
-}
-.model-list { flex: 1; overflow-y: auto; }
-.grp-hdr {
-  padding: 8px 16px 4px; font-size: .68rem; font-weight: 700;
-  color: var(--accent); text-transform: uppercase; letter-spacing: .07em;
-  background: #f7f8ff; border-top: 1px solid var(--border);
-}
-.model-item {
-  display: flex; align-items: flex-start; padding: 7px 16px;
-  cursor: pointer; transition: background .12s; gap: 8px;
-}
-.model-item:hover { background: #eef1ff; }
-.model-item input  {
-  accent-color: var(--accent); width: 14px; height: 14px;
-  flex-shrink: 0; margin-top: 2px; cursor: pointer;
-}
-.model-item span { font-size: .81rem; line-height: 1.4; }
-.no-models {
-  padding: 28px 16px; text-align: center; color: var(--muted); font-size: .85rem;
-}
-
-/* ── Controls ── */
-.controls {
-  padding: 12px 14px; border-top: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 11px; flex-shrink: 0;
-}
-.ctrl-row label {
-  font-size: .72rem; font-weight: 700; color: var(--muted);
-  display: flex; justify-content: space-between; margin-bottom: 4px;
-}
-.ctrl-row label strong { color: var(--accent); font-size: .8rem; }
-input[type="range"] { width: 100%; accent-color: var(--accent); }
-.btn {
-  border: none; border-radius: 8px; padding: 9px;
-  font-size: .88rem; font-weight: 700; cursor: pointer;
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  transition: all .15s; width: 100%; letter-spacing: .01em;
-}
-.btn-play { background: var(--accent); color: #fff; }
-.btn-play:hover:not(:disabled) { background: var(--accent-dark); }
-.btn-play:disabled { opacity: .4; cursor: not-allowed; }
-.btn-stop { background: var(--danger); color: #fff; }
-.btn-stop:hover { background: #c9313d; }
-
-/* ── Main area ── */
-.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-.game-area { flex: 1; overflow-y: auto; padding: 14px; }
-
-/* Empty hint */
-.hint {
-  height: 100%; display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  gap: 10px; color: var(--muted); font-size: .9rem; text-align: center;
-}
-.hint-icon { font-size: 2.8rem; opacity: .3; }
-
-/* ── Game grid ── */
-.game-grid { display: grid; gap: 14px; }
-
-/* ── Game card ── */
-.game-card {
-  background: var(--card-bg); border-radius: 12px;
-  box-shadow: var(--shadow); border: 2px solid transparent;
-  transition: border-color .25s; overflow: hidden;
-}
-.game-card.fell { border-color: var(--danger); }
-
-.card-head {
-  padding: 8px 12px; background: #fafbff;
-  border-bottom: 1px solid var(--border);
-  display: flex; justify-content: space-between; align-items: center; gap: 8px;
-}
-.card-name {
-  font-size: .8rem; font-weight: 700; color: var(--accent);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.ep-badge {
-  font-size: .68rem; background: #e8ecff; color: var(--accent);
-  padding: 2px 8px; border-radius: 10px; font-weight: 700; flex-shrink: 0;
-}
-
-.frame-box {
-  background: #0f172a;
-  display: flex; align-items: center; justify-content: center; min-height: 160px;
-}
-.frame-box img { width: 100%; display: block; }
-.frame-ph { color: #475569; font-size: .78rem; }
-
-.card-stats {
-  display: grid; grid-template-columns: repeat(3,1fr);
-  border-top: 1px solid var(--border);
-}
-.stat {
-  text-align: center; padding: 6px 0;
-  border-right: 1px solid var(--border);
-}
-.stat:last-child { border-right: none; }
-.stat-v { font-size: .98rem; font-weight: 700; }
-.stat-k { font-size: .6rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
-
-/* ── Results ── */
-.results {
-  background: var(--card-bg); border-top: 2px solid var(--border);
-  flex-shrink: 0; max-height: 180px; overflow-y: auto;
-}
-.res-head {
-  padding: 7px 14px 5px; font-size: .68rem; font-weight: 700; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .09em;
-  border-bottom: 1px solid var(--border); position: sticky; top: 0;
-  background: var(--card-bg); z-index: 1;
-}
-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
-th {
-  padding: 5px 12px; background: #f8f9fa; color: var(--muted);
-  font-weight: 700; font-size: .68rem; text-transform: uppercase;
-  letter-spacing: .04em; text-align: left; border-bottom: 1px solid var(--border);
-}
-td { padding: 5px 12px; border-bottom: 1px solid #f3f4f6; }
-tr:last-child td { border-bottom: none; }
-.tr-best { background: #f0fff4; }
-.badge-best {
-  background: #dcfce7; color: #15803d;
-  padding: 1px 6px; border-radius: 8px; font-size: .67rem; font-weight: 700;
-  margin-left: 4px;
-}
-.badge-goal {
-  background: #dbeafe; color: #1d4ed8;
-  padding: 1px 6px; border-radius: 8px; font-size: .67rem; font-weight: 700;
-}
-.res-empty { padding: 10px 14px; color: var(--muted); font-size: .8rem; }
-
-/* ── Status bar ── */
-.statusbar {
-  padding: 5px 14px; background: #f8f9fa; border-top: 1px solid var(--border);
-  font-size: .73rem; color: var(--muted);
-  display: flex; justify-content: space-between; align-items: center;
-  flex-shrink: 0;
-}
-.dot {
-  width: 7px; height: 7px; border-radius: 50%; background: #d1d5db;
-  display: inline-block; margin-right: 5px; vertical-align: middle;
-}
-.dot.live { background: var(--success); animation: blink 1.2s ease-in-out infinite; }
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
-.pbar-wrap { display: flex; align-items: center; gap: 8px; }
-.pbar { width: 130px; height: 4px; background: #e5e7eb; border-radius: 2px; overflow: hidden; }
-.pbar-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .3s; }
-
-/* ── Charts page ── */
-.chart-sidebar {
-  width: 300px; background: var(--sidebar-bg);
-  border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; flex-shrink: 0;
-}
-.chart-main {
-  flex: 1; display: flex; flex-direction: column; overflow: hidden;
-}
-.chart-display {
-  flex: 1; overflow-y: auto; padding: 20px;
-  display: flex; align-items: flex-start; justify-content: center;
-}
-.chart-display img {
-  max-width: 100%; height: auto; border-radius: 10px;
-  box-shadow: var(--shadow); background: #fff;
-}
-.chart-controls {
-  padding: 12px 14px; border-top: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 10px; flex-shrink: 0;
-}
-.chart-controls select {
-  width: 100%; padding: 8px 10px; border-radius: 8px;
-  border: 1px solid var(--border); font-size: .82rem;
-  color: var(--text); background: #fff; cursor: pointer;
-  appearance: auto;
-}
-.chart-controls select:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
-.chart-status {
-  padding: 5px 14px; background: #f8f9fa; border-top: 1px solid var(--border);
-  font-size: .73rem; color: var(--muted); flex-shrink: 0;
-}
-.csv-count {
-  padding: 6px 14px; font-size: .72rem; color: var(--muted);
-  border-top: 1px solid var(--border); flex-shrink: 0;
-  display: flex; justify-content: space-between; align-items: center;
-}
-.csv-count a {
-  color: var(--accent); cursor: pointer; text-decoration: none; font-weight: 600;
-}
-.csv-count a:hover { text-decoration: underline; }
-.spinner {
-  display: inline-block; width: 16px; height: 16px;
-  border: 2px solid var(--border); border-top-color: var(--accent);
-  border-radius: 50%; animation: spin .6s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-.chart-desc {
-  font-size: .72rem; color: var(--muted); line-height: 1.4;
-  padding: 0 2px;
-}
-
-/* ── Multi-chart grid ── */
-.chart-grid {
-  display: grid; gap: 18px; width: 100%;
-  grid-template-columns: 1fr;
-}
-.chart-grid.cols-2 { grid-template-columns: 1fr 1fr; }
-.chart-card {
-  background: var(--card-bg); border-radius: 12px;
-  box-shadow: var(--shadow); overflow: hidden;
-}
-.chart-card-head {
-  padding: 8px 14px; background: #fafbff;
-  border-bottom: 1px solid var(--border);
-  font-size: .78rem; font-weight: 700; color: var(--accent);
-}
-.chart-card img { width: 100%; display: block; }
-.chart-card .chart-error {
-  padding: 24px; text-align: center; color: var(--muted); font-size: .82rem;
-}
-
-/* ── Family group checkbox ── */
-.grp-hdr-row {
-  display: flex; align-items: center; gap: 6px;
-  padding: 8px 16px 4px; font-size: .68rem; font-weight: 700;
-  color: var(--accent); text-transform: uppercase; letter-spacing: .07em;
-  background: #f7f8ff; border-top: 1px solid var(--border);
-}
-.grp-hdr-row input {
-  accent-color: var(--accent); width: 13px; height: 13px; cursor: pointer;
-}
-.btn-row { display: flex; gap: 8px; }
-.btn-row .btn { flex: 1; }
-.btn-secondary {
-  background: #e8ecff; color: var(--accent);
-  border: none; border-radius: 8px; padding: 9px;
-  font-size: .82rem; font-weight: 700; cursor: pointer;
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  transition: all .15s; letter-spacing: .01em;
-}
-.btn-secondary:hover:not(:disabled) { background: #d4dbff; }
-.btn-secondary:disabled { opacity: .4; cursor: not-allowed; }
-
-/* ── Chart type multi-select ── */
-.chart-type-list {
-  max-height: 180px; overflow-y: auto;
-  border: 1px solid var(--border); border-radius: 8px;
-  background: #fff; padding: 4px 0;
-}
-.ct-item {
-  display: flex; align-items: center; gap: 7px;
-  padding: 4px 12px; cursor: pointer; font-size: .78rem;
-  transition: background .1s;
-}
-.ct-item:hover { background: #f0f2ff; }
-.ct-item input { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
-.ct-item span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ct-count {
-  font-size: .72rem; color: var(--muted); padding: 4px 2px 6px;
-}
-
-/* ── Gameplay charts section ── */
-.gp-charts {
 :root {
   --bg: #0f172a;
   --card-bg: rgba(30, 41, 59, 0.7);
+  --sidebar-bg: rgba(15, 23, 42, 0.5);
   --accent: #38bdf8;
   --accent-glow: rgba(56, 189, 248, 0.3);
+  --danger: #ef4444;
+  --success: #22c55e;
   --text: #f8fafc;
   --text-muted: #94a3b8;
   --border: rgba(255, 255, 255, 0.1);
-  --success: #22c55e;
+  --shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
 }
 
-* { box-sizing: border-box; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  margin: 0; font-family: 'Inter', -apple-system, sans-serif;
+  margin: 0; font-family: 'Inter', system-ui, -apple-system, sans-serif;
   background-color: var(--bg); color: var(--text);
   background-image: radial-gradient(circle at 50% -20%, #1e293b 0%, #0f172a 100%);
-  min-height: 100vh;
+  height: 100vh; display: flex; flex-direction: column; overflow: hidden;
 }
 
 header {
-  padding: 2rem 5%; display: flex; align-items: center; gap: 2rem;
-  border-bottom: 1px solid var(--border); backdrop-filter: blur(10px);
+  padding: 1rem 5%; display: flex; align-items: center; gap: 2rem;
+  border-bottom: 1px solid var(--border); backdrop-filter: blur(10px); flex-shrink: 0;
 }
-.hdr-logo { height: 60px; filter: drop-shadow(0 0 10px var(--accent-glow)); }
-.hdr-text h1 { margin: 0; font-size: 1.8rem; background: linear-gradient(90deg, #fff, var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.hdr-text p { margin: 5px 0 0; color: var(--text-muted); font-size: 0.9rem; }
+.hdr-logo { height: 45px; filter: drop-shadow(0 0 10px var(--accent-glow)); }
+.hdr-text h1 { margin: 0; font-size: 1.5rem; background: linear-gradient(90deg, #fff, var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.hdr-text p { margin: 2px 0 0; color: var(--text-muted); font-size: 0.8rem; }
 
 .tab-bar {
-  display: flex; gap: 1rem; padding: 1rem 5%; background: rgba(15, 23, 42, 0.5);
-  position: sticky; top: 0; z-index: 100; backdrop-filter: blur(15px); border-bottom: 1px solid var(--border);
+  display: flex; gap: 0.5rem; padding: 0.5rem 5%; background: rgba(15, 23, 42, 0.5);
+  backdrop-filter: blur(15px); border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
 .tab-btn {
-  background: none; border: none; color: var(--text-muted); padding: 0.6rem 1.2rem;
-  cursor: pointer; font-size: 0.95rem; font-weight: 500; transition: all 0.2s;
+  background: none; border: none; color: var(--text-muted); padding: 0.5rem 1rem;
+  cursor: pointer; font-size: 0.9rem; font-weight: 500; transition: all 0.2s;
   border-radius: 8px; display: flex; align-items: center; gap: 8px;
 }
 .tab-btn:hover { background: rgba(255,255,255,0.05); color: #fff; }
 .tab-btn.active { background: var(--accent); color: #000; font-weight: 600; box-shadow: 0 0 15px var(--accent-glow); }
 
-.container { max-width: 1400px; margin: 2rem auto; padding: 0 2rem; }
+.container { flex: 1; overflow-y: auto; padding: 2rem 5%; position: relative; }
 .tab-page { display: none; animation: fadeIn 0.4s ease-out; }
-.active { display: block; }
+.tab-page.active { display: block; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
 /* Experiment Grid */
-.exp-grid { display: flex; flex-direction: column; gap: 3rem; margin-bottom: 5rem; }
+.exp-grid { display: flex; flex-direction: column; gap: 2.5rem; max-width: 1200px; margin: 0 auto; }
 .exp-card {
   background: var(--card-bg); border-radius: 20px; border: 1px solid var(--border);
-  overflow: hidden; backdrop-filter: blur(10px); transition: transform 0.3s;
+  overflow: hidden; backdrop-filter: blur(10px); box-shadow: var(--shadow);
 }
-.exp-header { padding: 2rem; border-bottom: 1px solid var(--border); background: rgba(15, 23, 42, 0.3); }
-.exp-header h2 { margin: 0; font-size: 1.5rem; color: var(--accent); }
-.exp-header .subtitle { color: var(--text-muted); font-size: 0.9rem; margin-top: 4px; text-transform: uppercase; letter-spacing: 1px; }
-.exp-body { display: grid; grid-template-columns: 1fr 1.5fr; gap: 2rem; padding: 2rem; }
+.exp-header { padding: 1.5rem 2rem; border-bottom: 1px solid var(--border); background: rgba(15, 23, 42, 0.3); }
+.exp-header h2 { margin: 0; font-size: 1.4rem; color: var(--accent); }
+.exp-header .subtitle { color: var(--text-muted); font-size: 0.8rem; margin-top: 4px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; }
+.exp-body { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; padding: 2rem; }
 .exp-info p { color: #cbd5e1; line-height: 1.6; font-size: 0.95rem; margin-bottom: 1.5rem; }
 
 .btn {
-  padding: 0.8rem 1.5rem; border-radius: 10px; border: none; font-weight: 600;
+  padding: 0.7rem 1.4rem; border-radius: 10px; border: none; font-weight: 600;
   cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 8px;
+  font-size: 0.9rem;
 }
 .btn-primary { background: var(--accent); color: #000; }
-.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 5px 15px var(--accent-glow); }
+.btn-primary:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 5px 15px var(--accent-glow); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Visualizer Cards */
-.vis-container { display: flex; flex-direction: column; gap: 1.5rem; }
-.vis-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+.vis-container { display: flex; flex-direction: column; gap: 1rem; }
+.vis-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
 .mini-card {
-  background: rgba(15, 23, 42, 0.5); border-radius: 12px; border: 1px solid var(--border); padding: 10px;
-  text-align: center;
+  background: rgba(15, 23, 42, 0.5); border-radius: 12px; border: 1px solid var(--border); padding: 8px;
+  text-align: center; display: flex; flex-direction: column;
 }
-.mini-card .canvas-wrap { aspect-ratio: 4/3; background: #000; border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+.mini-card .canvas-wrap { aspect-ratio: 4/3; background: #000; border-radius: 6px; margin-bottom: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
 .mini-card img { width: 100%; height: 100%; object-fit: cover; }
-.mini-card .label { font-size: 0.75rem; font-weight: 600; color: var(--text-muted); }
-.mini-card .val { font-size: 1.1rem; font-weight: 700; color: var(--accent); border-top: 1px solid var(--border); margin-top: 5px; padding-top: 5px;}
+.mini-card .label { font-size: 0.7rem; font-weight: 600; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini-card .val { font-size: 1rem; font-weight: 700; color: var(--accent); border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
 
-/* Charts */
-.chart-area { min-height: 200px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.2); border-radius: 12px; }
-.chart-area img { max-width: 100%; border-radius: 8px; }
+/* Charts Area */
+.chart-area { min-height: 250px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.2); border-radius: 15px; border: 1px dashed var(--border); overflow: hidden; }
+.chart-area img { max-width: 100%; max-height: 100%; border-radius: 10px; transition: transform 0.3s; }
+.chart-area img:hover { transform: scale(1.02); }
 
-.hint { text-align: center; color: var(--text-muted); padding: 3rem; border: 2px dashed rgba(255,255,255,0.05); border-radius: 20px; }
+/* Play Tab Specific */
+.play-layout { display: grid; grid-template-columns: 300px 1fr; gap: 2rem; height: calc(100vh - 180px); }
+.sidebar { background: var(--card-bg); border-radius: 20px; border: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+.sb-head { padding: 1.2rem; border-bottom: 1px solid var(--border); font-weight: 700; display: flex; justify-content: space-between; }
+.model-list { flex: 1; overflow-y: auto; padding: 0.5rem; }
+.grp-hdr { padding: 10px 12px 5px; font-size: 0.7rem; font-weight: 800; color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em; }
+.model-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
+.model-item:hover { background: rgba(255,255,255,0.05); }
+.model-item input { accent-color: var(--accent); }
+.model-item span { font-size: 0.85rem; }
+.sb-ctrls { padding: 1.2rem; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 1rem; }
+
+.main-game { background: rgba(0,0,0,0.2); border-radius: 20px; border: 1px solid var(--border); position: relative; overflow-y: auto; padding: 1.5rem; }
+
+/* Results Table */
+.res-table { width: 100%; border-collapse: collapse; margin-top: 1.5rem; font-size: 0.85rem; }
+.res-table th { text-align: left; padding: 10px; border-bottom: 2px solid var(--border); color: var(--text-muted); }
+.res-table td { padding: 10px; border-bottom: 1px solid var(--border); }
+.badge-best { background: var(--success); color: #000; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 800; margin-left: 6px; }
+
+/* Global Utilities */
+.hint { text-align: center; color: var(--text-muted); padding: 4rem 2rem; border: 2px dashed rgba(255,255,255,0.05); border-radius: 24px; margin: 2rem; }
+.spinner { width: 30px; height: 30px; border: 3px solid rgba(255,255,255,0.1); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Game Grid for Play tab */
+.game-grid { display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.game-card { background: var(--card-bg); border-radius: 15px; border: 1px solid var(--border); padding: 1rem; display: flex; flex-direction: column; gap: 10px; }
+.game-card .frame-box { aspect-ratio: 4/3; background: #000; border-radius: 10px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.game-card img { width: 100%; height: 100%; object-fit: cover; }
+.game-card .card-head { display: flex; justify-content: space-between; align-items: center; }
+.game-card .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; border-top: 1px solid var(--border); padding-top: 10px; }
+.game-card .stat-box { text-align: center; }
+.game-card .stat-val { font-size: 1.1rem; font-weight: 700; color: var(--accent); }
+.game-card .stat-lbl { font-size: 0.6rem; color: var(--text-muted); text-transform: uppercase; }
+
+/* Statusbar */
+.statusbar { position: fixed; bottom: 0; left: 0; right: 0; padding: 8px 5%; background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(10px); border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; color: var(--text-muted); z-index: 1000; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #475569; display: inline-block; margin-right: 8px; }
+.dot.live { background: var(--success); box-shadow: 0 0 10px var(--success); animation: pulse 1.5s infinite; }
+@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
 </style>
 </head>
 <body>
 
 <header>
-  <img id="hdrLogo" class="hdr-logo" src="/logo" alt="HUST">
+  <img src="/logo" class="hdr-logo" alt="HUST" onerror="this.src='https://upload.wikimedia.org/wikipedia/commons/a/a2/Logo_Hust.png'">
   <div class="hdr-text">
     <h1>CartPole HCRL — Interactive Insights</h1>
     <p>Hanoi University of Science and Technology &nbsp;·&nbsp; Statistical Machine Learning Dashboard</p>
@@ -1647,39 +1366,47 @@ header {
 
 <nav class="tab-bar">
   <button class="tab-btn active" onclick="switchTab('report')" id="tabReport">
-    <span class="tab-icon">📖</span> Experiments
+    📖 <span>Experiments</span>
   </button>
   <button class="tab-btn" onclick="switchTab('play')" id="tabPlay">
-    <span class="tab-icon">🎮</span> Free Play
+    🎮 <span>Free Play</span>
   </button>
   <button class="tab-btn" onclick="switchTab('charts')" id="tabCharts">
-    <span class="tab-icon">📊</span> Raw Charts
+    📊 <span>Raw Charts</span>
   </button>
 </nav>
 
 <div class="container">
   <!-- ══════════════════════════════════════════════════════════════ -->
-  <!-- TAB 0: EXPERIMENT REPORT (NEW MAIN VIEW)                      -->
+  <!-- TAB 0: EXPERIMENT REPORT                                      -->
   <!-- ══════════════════════════════════════════════════════════════ -->
   <div class="tab-page active" id="pageReport">
     <div class="exp-grid" id="expGrid">
-      <div class="hint">Loading experiments...</div>
+      <div class="hint"><div class="spinner"></div><p>Loading experiments...</p></div>
     </div>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════════ -->
-  <!-- TAB 1: PLAY (original logic, modern style)                    -->
+  <!-- TAB 1: FREE PLAY                                              -->
   <!-- ══════════════════════════════════════════════════════════════ -->
   <div class="tab-page" id="pagePlay">
-    <div style="display:grid; grid-template-columns: 300px 1fr; gap: 2rem;">
-      <aside style="background: var(--card-bg); padding: 1.5rem; border-radius: 20px;">
-        <h3 style="margin-top:0">Models</h3>
-        <div id="modelList" style="max-height: 400px; overflow-y: auto;"></div>
-        <hr style="border:0; border-top:1px solid var(--border); margin: 1.5rem 0;">
-        <button class="btn btn-primary" id="playBtn" onclick="togglePlay()" style="width:100%; justify-content:center;">▶ Watch Live</button>
+    <div class="play-layout">
+      <aside class="sidebar">
+        <div class="sb-head">Models <span id="selCount" style="color:var(--accent)">0</span></div>
+        <div class="model-list" id="modelList"></div>
+        <div class="sb-ctrls">
+          <div style="font-size: 0.8rem;">
+            <div style="display:flex; justify-content:space-between"><span>Episodes</span> <strong id="epVal">5</strong></div>
+            <input type="range" id="epSlider" min="1" max="50" value="5" style="width:100%" oninput="document.getElementById('epVal').textContent=this.value">
+          </div>
+          <button class="btn btn-primary" id="playBtn" onclick="togglePlay()" style="justify-content:center">▶ Start Watch</button>
+        </div>
       </aside>
-      <main id="gameArea">
-        <div class="hint">Select models and click Watch Live.</div>
+      <main class="main-game">
+        <div id="gameArea">
+          <div class="hint">Select models from the sidebar to watch them perform live.</div>
+        </div>
+        <div id="resultsTableContainer"></div>
       </main>
     </div>
   </div>
@@ -1688,17 +1415,57 @@ header {
   <!-- TAB 2: RAW CHARTS                                             -->
   <!-- ══════════════════════════════════════════════════════════════ -->
   <div class="tab-page" id="pageCharts">
-    <div id="chartDisplay">
-       <div class="hint">Select CSV files to generate custom analytics.</div>
+    <div class="play-layout">
+      <aside class="sidebar">
+        <div class="sb-head">Data Sources <span id="csvCount" style="color:var(--accent)">0</span></div>
+        <div class="model-list" id="csvList">
+          <div class="hint" style="padding:1rem; border:none">Loading data...</div>
+        </div>
+        <div class="sb-ctrls">
+          <div class="ctrl-group">
+            <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:8px">Select Chart Types</div>
+            <div id="typeList" style="display:flex; flex-direction:column; gap:4px">
+              <label class="model-item"><input type="checkbox" value="training_curves" checked> <span>Learning Curves</span></label>
+              <label class="model-item"><input type="checkbox" value="training_curves_std"> <span>Curves (Mean±Std)</span></label>
+              <label class="model-item"><input type="checkbox" value="box_plot"> <span>Distribution (Box)</span></label>
+              <label class="model-item"><input type="checkbox" value="convergence"> <span>Convergence Analysis</span></label>
+              <label class="model-item"><input type="checkbox" value="success_rate"> <span>Success Rate</span></label>
+              <label class="model-item"><input type="checkbox" value="heatmap"> <span>Performance Heatmap</span></label>
+            </div>
+          </div>
+          <button class="btn btn-primary" id="genBtn" onclick="generateCharts()" style="justify-content:center">📊 Generate Charts</button>
+        </div>
+      </aside>
+      <main class="main-game" id="chartDisplay">
+        <div class="hint">
+          <div class="hint-icon" style="font-size:3rem; margin-bottom:1rem">📈</div>
+          <p>Select training history files (CSV) and chart types to perform deep analysis.</p>
+        </div>
+      </main>
     </div>
   </div>
 </div>
 
+<div class="statusbar">
+  <div><span class="dot" id="statusDot"></span><span id="statusTxt">System Ready</span></div>
+  <div id="progressTxt">Waiting for user input...</div>
+</div>
+
 <script>
-let currentTab = 'report';
+/* ══════════════════════════════════════════════════════════════════
+   GLOBAL STATE & UTILS
+   ══════════════════════════════════════════════════════════════════ */
+let experiments = [];
+let modelsLoaded = false;
+let selectedModels = new Set();
+let es = null;
+
+function esc(s) {
+  if (!s) return "";
+  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
 function switchTab(tab) {
-  currentTab = tab;
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
   document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
@@ -1706,44 +1473,129 @@ function switchTab(tab) {
   
   if (tab === 'report') loadExperiments();
   if (tab === 'play' && !modelsLoaded) loadModels();
+  if (tab === 'charts' && !chartsLoaded) loadCsvs();
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   EXPERIMENT REPORT LOGIC
+   RAW CHARTS TAB
+   ══════════════════════════════════════════════════════════════════ */
+let chartsLoaded = false;
+let selectedCsvs = new Set();
+
+function loadCsvs() {
+  chartsLoaded = true;
+  fetch('/api/csvs')
+    .then(r => r.json())
+    .then(csvs => {
+      const list = document.getElementById('csvList');
+      if (!csvs.length) { list.innerHTML = '<div class="hint">No CSV files found.</div>'; return; }
+      
+      const tree = {};
+      csvs.forEach(c => { if (!tree[c.group]) tree[c.group] = []; tree[c.group].push(c); });
+      
+      let html = '';
+      for (const [grp, items] of Object.entries(tree)) {
+        html += `<div class="grp-hdr">${esc(grp)}</div>`;
+        items.forEach(c => {
+          html += `
+            <label class="model-item">
+              <input type="checkbox" value="${esc(c.path)}" onchange="onCsvToggle(this)">
+              <span>${esc(c.label)}</span>
+            </label>`;
+        });
+      }
+      list.innerHTML = html;
+    });
+}
+
+function onCsvToggle(cb) {
+  cb.checked ? selectedCsvs.add(cb.value) : selectedCsvs.delete(cb.value);
+  document.getElementById('csvCount').textContent = selectedCsvs.size;
+}
+
+function generateCharts() {
+  const types = [...document.querySelectorAll('#typeList input:checked')].map(i => i.value);
+  if (!selectedCsvs.size) { alert("Select at least one CSV file."); return; }
+  if (!types.length) { alert("Select at least one chart type."); return; }
+
+  const btn = document.getElementById('genBtn');
+  const display = document.getElementById('chartDisplay');
+  
+  btn.disabled = true;
+  btn.textContent = "⌛ Generating...";
+  display.innerHTML = '<div class="hint"><div class="spinner"></div><p>Performing analysis...</p></div>';
+
+  fetch('/api/multi-chart', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      csvs: [...selectedCsvs],
+      chart_types: types,
+      options: { window: 20 }
+    })
+  })
+  .then(r => r.json())
+  .then(data => {
+    btn.disabled = false;
+    btn.textContent = "📊 Generate Charts";
+    
+    if (!data.charts || !data.charts.length) {
+      display.innerHTML = '<div class="hint">No data could be generated.</div>';
+      return;
+    }
+
+    display.innerHTML = `
+      <div style="display:flex; flex-direction:column; gap:20px; padding:10px">
+        ${data.charts.map(c => `
+          <div class="exp-card">
+            <div class="exp-header"><h2>${esc(c.chart_type.replace(/_/g, ' ').toUpperCase())}</h2></div>
+            <div class="chart-area">${c.image ? `<img src="data:image/png;base64,${c.image}">` : `<div style="color:var(--danger)">Error: ${esc(c.error)}</div>`}</div>
+          </div>
+        `).join('')}
+      </div>`;
+  })
+  .catch(err => {
+    btn.disabled = false;
+    btn.textContent = "📊 Generate Charts";
+    alert("Request failed: " + err.message);
+  });
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   LANDING PAGE: EXPERIMENTS
    ══════════════════════════════════════════════════════════════════ */
 function loadExperiments() {
   fetch('/api/experiments')
     .then(r => r.json())
-    .then(exps => {
+    .then(data => {
+      experiments = data;
       const grid = document.getElementById('expGrid');
-      grid.innerHTML = exps.map(exp => `
-        <div class="exp-card" id="exp-${exp.id}">
+      grid.innerHTML = data.map(exp => `
+        <div class="exp-card">
           <div class="exp-header">
-            <div class="subtitle">${exp.subtitle}</div>
-            <h2>${exp.title}</h2>
+            <div class="subtitle">${esc(exp.subtitle)}</div>
+            <h2>${esc(exp.title)}</h2>
           </div>
           <div class="exp-body">
             <div class="exp-info">
-              <p>${exp.description}</p>
+              <p>${esc(exp.description)}</p>
               <div class="vis-container">
-                <div class="vis-grid" id="vis-${exp.id}">
+                <div class="vis-grid">
                   ${exp.actual_models.map((m, i) => `
                     <div class="mini-card">
-                      <div class="canvas-wrap"><img id="frame-${exp.id}-${i}" src=""></div>
-                      <div class="label">${m.label}</div>
-                      <div class="val" id="val-${exp.id}-${i}">0</div>
+                      <div class="canvas-wrap"><img id="f-${exp.id}-${i}" src="" style="display:none"></div>
+                      <div class="label" title="${esc(m.label)}">${esc(m.label)}</div>
+                      <div class="val" id="v-${exp.id}-${i}">0 steps</div>
                     </div>
                   `).join('')}
                 </div>
-                <button class="btn btn-primary" onclick="runExpVisualizer('${exp.id}')" id="btn-${exp.id}">
-                  ▶ Run Visualizer
-                </button>
+                <button class="btn btn-primary" onclick="runExp('${exp.id}', this)">▶ Run Experiment</button>
               </div>
             </div>
             <div class="exp-charts">
-               <div class="chart-area" id="chart-${exp.id}">
-                  <div style="color:var(--text-muted); font-size: 0.8rem;">Chart will load after visualizer</div>
-               </div>
+              <div class="chart-area" id="c-${exp.id}">
+                <div style="color:var(--text-muted); font-size:0.8rem">Simulation results will generate a comparison chart here.</div>
+              </div>
             </div>
           </div>
         </div>
@@ -1751,562 +1603,186 @@ function loadExperiments() {
     });
 }
 
-function runExpVisualizer(id) {
-  const btn = document.getElementById('btn-' + id);
+function runExp(id, btn) {
+  const exp = experiments.find(e => e.id === id);
+  if (!exp) return;
+
   btn.disabled = true;
-  btn.textContent = '⌛ Running...';
+  btn.textContent = "⌛ Simulating...";
+  
+  const p = new URLSearchParams();
+  exp.actual_models.forEach(m => p.append('models', m.path));
+  p.set('episodes', 3);
+  p.set('fps', 35);
 
-  // Get metadata for this experiment
-  fetch('/api/experiments').then(r => r.json()).then(exps => {
-    const exp = exps.find(e => e.id === id);
-    if (!exp) return;
-
-    // 1. Kick off visualizer (stream to the specific images in এই card)
-    const p = new URLSearchParams();
-    exp.actual_models.forEach(m => p.append('models', m.path));
-    p.set('episodes', 3);
-    p.set('fps', 40);
-
-    const es = new EventSource('/api/play?' + p);
-    es.onmessage = (e) => {
-      const d = JSON.parse(e.data);
-      if (d.type === 'frame') {
-        d.frames.forEach((b64, i) => {
-          const img = document.getElementById(\`frame-\${id}-\${i}\`);
-          if (img) img.src = 'data:image/jpeg;base64,' + b64;
-          const val = document.getElementById(\`val-\${id}-\${i}\`);
-          if (val && d.stats) val.textContent = d.stats[i].steps + ' steps';
-        });
-      } else if (d.type === 'done') {
-        es.close();
-        btn.textContent = '✅ Completed';
-        loadExpCharts(exp);
-      }
-    };
-  });
+  const eventSource = new EventSource('/api/play?' + p);
+  eventSource.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    if (d.type === 'frame') {
+      d.frames.forEach((b64, i) => {
+        const img = document.getElementById(`f-${id}-${i}`);
+        if (img) { img.src = 'data:image/jpeg;base64,' + b64; img.style.display = 'block'; }
+        const val = document.getElementById(`v-${id}-${i}`);
+        if (val && d.stats) val.textContent = d.stats[i].steps + ' steps';
+      });
+    } else if (d.type === 'done') {
+      eventSource.close();
+      btn.textContent = "✅ Completed";
+      fetchExpCharts(exp);
+    }
+  };
+  eventSource.onerror = () => { eventSource.close(); btn.disabled = false; btn.textContent = "▶ Run Experiment"; };
 }
 
-function loadExpCharts(exp) {
-  const chartArea = document.getElementById('chart-' + exp.id);
-  chartArea.innerHTML = '<div class="spinner"></div>';
-
+function fetchExpCharts(exp) {
+  const area = document.getElementById('c-' + exp.id);
+  area.innerHTML = '<div class="spinner"></div>';
+  
   fetch('/api/multi-chart', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       csvs: exp.actual_csvs,
       chart_types: exp.chart_types,
       options: { window: 15 }
-    }),
+    })
   })
   .then(r => r.json())
   .then(data => {
-    if (data.charts && data.charts[0]) {
-      chartArea.innerHTML = \`<img src="data:image/png;base64,\${data.charts[0].image}">\`;
+    if (data.charts && data.charts.length > 0) {
+      area.innerHTML = `<img src="data:image/png;base64,${data.charts[0].image}">`;
+    } else {
+      area.innerHTML = '<div style="color:var(--danger)">No chart data found.</div>';
     }
   });
 }
 
-// Init
-loadExperiments();
-let modelsLoaded = false;
+/* ══════════════════════════════════════════════════════════════════
+   FREE PLAY TAB
+   ══════════════════════════════════════════════════════════════════ */
 function loadModels() {
   modelsLoaded = true;
-  // ... reuse original model loading logic but with modern render
-}
-</script>
-
-<script>
-/* ══════════════════════════════════════════════════════════════════
-   TAB SWITCHING
-   ══════════════════════════════════════════════════════════════════ */
-function switchTab(tab) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
-  if (tab === 'play') {
-    document.getElementById('tabPlay').classList.add('active');
-    document.getElementById('pagePlay').classList.add('active');
-  } else {
-    document.getElementById('tabCharts').classList.add('active');
-    document.getElementById('pageCharts').classList.add('active');
-    if (!chartsLoaded) loadCsvList();
-  }
-}
-
-/* ══════════════════════════════════════════════════════════════════
-   PLAY TAB (original code, unchanged)
-   ══════════════════════════════════════════════════════════════════ */
-let es = null;
-let selected = new Set();
-let labelMap  = {};
-let lastGameplaySummary = null;
-
-fetch('/api/models')
-  .then(r => r.json())
-  .then(models => {
-    for (const m of models) labelMap[m.path] = m.label;
-    renderSidebar(models);
-  });
-
-function renderSidebar(models) {
-  const list = document.getElementById('modelList');
-  if (!models.length) {
-    list.innerHTML = '<div class="no-models">No models found.<br>Run experiments first.</div>';
-    return;
-  }
-  const tree = {};
-  for (const m of models) {
-    if (!tree[m.group]) tree[m.group] = [];
-    tree[m.group].push(m);
-  }
-  let html = '';
-  for (const [group, items] of Object.entries(tree)) {
-    html += `<div class="grp-hdr">${esc(group)}</div>`;
-    for (const m of items) {
-      html += `
-        <label class="model-item">
-          <input type="checkbox" value="${esc(m.path)}" onchange="onToggle(this)">
-          <span>${esc(m.label)}</span>
-        </label>`;
-    }
-  }
-  list.innerHTML = html;
+  fetch('/api/models')
+    .then(r => r.json())
+    .then(models => {
+      const list = document.getElementById('modelList');
+      if (!models.length) { list.innerHTML = '<div class="hint">No models found.</div>'; return; }
+      
+      const tree = {};
+      models.forEach(m => { if (!tree[m.group]) tree[m.group] = []; tree[m.group].push(m); });
+      
+      let html = '';
+      for (const [grp, items] of Object.entries(tree)) {
+        html += `<div class="grp-hdr">${esc(grp)}</div>`;
+        items.forEach(m => {
+          html += `
+            <label class="model-item">
+              <input type="checkbox" value="${esc(m.path)}" data-label="${esc(m.label)}" onchange="onModelToggle(this)">
+              <span>${esc(m.label)}</span>
+            </label>`;
+        });
+      }
+      list.innerHTML = html;
+    });
 }
 
-function esc(s) {
-  return String(s)
-    .replace(/&/g,'&amp;').replace(/"/g,'&quot;')
-    .replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function onModelToggle(cb) {
+  cb.checked ? selectedModels.add(cb.value) : selectedModels.delete(cb.value);
+  document.getElementById('selCount').textContent = selectedModels.size;
 }
 
-function onToggle(cb) {
-  cb.checked ? selected.add(cb.value) : selected.delete(cb.value);
+function togglePlay() {
+  if (es) { stopPlay(); } else { startPlay(); }
 }
-
-function togglePlay() { es ? stopPlay() : startPlay(); }
 
 function startPlay() {
-  if (!selected.size) { alert('Select at least one model first.'); return; }
-  lastGameplaySummary = null;
-  const gpPanel = document.getElementById('gpChartsPanel');
-  if (gpPanel) gpPanel.style.display = 'none';
-  const paths    = [...selected];
-  const episodes = +document.getElementById('epSlider').value;
-  const fps      = +document.getElementById('fpsSlider').value;
+  if (!selectedModels.size) { alert("Please select at least one model."); return; }
+  
+  const paths = [...selectedModels];
+  const episodes = document.getElementById('epSlider').value;
   const p = new URLSearchParams();
   paths.forEach(path => p.append('models', path));
   p.set('episodes', episodes);
-  p.set('fps', fps);
-  buildCards(paths);
-  setProgress(0, episodes);
-  setStatus('Connecting…');
+  p.set('fps', 30);
+  
+  buildGameGrid(paths);
+  
   const btn = document.getElementById('playBtn');
-  btn.className = 'btn btn-stop';
-  btn.textContent = '■ Stop';
-  document.getElementById('dot').classList.add('live');
+  btn.textContent = "◼ Stop Simulation";
+  btn.classList.add('btn-stop');
+  document.getElementById('statusDot').classList.add('live');
+  document.getElementById('statusTxt').textContent = "Streaming Live Gameplay...";
+
   es = new EventSource('/api/play?' + p);
-  es.onmessage = onMsg;
-  es.onerror   = () => stopPlay(false);
+  es.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    if (d.type === 'frame') {
+      d.frames.forEach((b64, i) => {
+        const img = document.getElementById(`live-f-${i}`);
+        if (img) { img.src = 'data:image/jpeg;base64,' + b64; img.style.display = 'block'; }
+        const steps = document.getElementById(`live-s-${i}`);
+        if (steps) steps.textContent = d.stats[i].steps;
+        const mean = document.getElementById(`live-m-${i}`);
+        if (mean) mean.textContent = d.stats[i].mean.toFixed(1);
+      });
+      document.getElementById('progressTxt').textContent = `Episode ${d.episode} / ${d.total}`;
+    } else if (d.type === 'done') {
+      stopPlay();
+      renderFinalResults(d.summary);
+    }
+  };
+  es.onerror = () => stopPlay();
 }
 
-function stopPlay(clearStatus = true) {
+function stopPlay() {
   if (es) { es.close(); es = null; }
   const btn = document.getElementById('playBtn');
-  btn.className = 'btn btn-play';
-  btn.textContent = '▶ Play';
-  document.getElementById('dot').classList.remove('live');
-  if (clearStatus) setStatus('Ready');
+  btn.textContent = "▶ Start Watch";
+  btn.classList.remove('btn-stop');
+  document.getElementById('statusDot').classList.remove('live');
+  document.getElementById('statusTxt').textContent = "System Ready";
 }
 
-function onMsg(e) {
-  const d = JSON.parse(e.data);
-  if (d.type === 'frame') {
-    d.frames.forEach((b64, i) => {
-      const img = document.getElementById('f' + i);
-      const ph  = document.getElementById('ph' + i);
-      if (img) { img.src = 'data:image/jpeg;base64,' + b64; img.style.display = 'block'; }
-      if (ph)  ph.style.display = 'none';
-    });
-    if (d.stats) d.stats.forEach((s, i) => updateCard(i, s));
-    setProgress(d.episode, d.total);
-    setStatus(`Episode ${d.episode} / ${d.total}`);
-  } else if (d.type === 'done') {
-    lastGameplaySummary = d.summary;
-    showResults(d.summary);
-    stopPlay(false);
-    setStatus(`Done — ${d.summary.length} model(s) evaluated`);
-    // Show gameplay charts panel and auto-generate
-    const gpPanel = document.getElementById('gpChartsPanel');
-    if (gpPanel && d.summary.length >= 1) {
-      gpPanel.style.display = '';
-      generateGameplayCharts();
-    }
-  }
-}
-
-function buildCards(paths) {
-  const area = document.getElementById('gameArea');
-  const n    = paths.length;
-  const cols = n === 1 ? '1fr'
-             : n === 2 ? '1fr 1fr'
-             : 'repeat(auto-fill, minmax(280px, 1fr))';
-  let html = `<div class="game-grid" style="grid-template-columns:${cols}">`;
-  for (let i = 0; i < n; i++) {
-    const lbl = esc(labelMap[paths[i]] || paths[i].split(/[/\\]/).pop());
-    html += `
-      <div class="game-card" id="card${i}">
-        <div class="card-head">
-          <span class="card-name" title="${lbl}">${lbl}</span>
-          <span class="ep-badge" id="ep${i}">Ep —</span>
-        </div>
-        <div class="frame-box">
-          <img id="f${i}" style="display:none" alt="game frame">
-          <div id="ph${i}" class="frame-ph">Waiting for frames…</div>
-        </div>
-        <div class="card-stats">
-          <div class="stat">
-            <div class="stat-v" id="sv${i}">—</div>
-            <div class="stat-k">Steps</div>
-          </div>
-          <div class="stat">
-            <div class="stat-v" id="mv${i}">—</div>
-            <div class="stat-k">Mean</div>
-          </div>
-          <div class="stat">
-            <div class="stat-v" id="bv${i}">—</div>
-            <div class="stat-k">Best</div>
+function buildGameGrid(paths) {
+  const container = document.getElementById('gameArea');
+  container.innerHTML = `
+    <div class="game-grid">
+      ${paths.map((p, i) => `
+        <div class="game-card">
+          <div class="card-head"><strong>Model ${i+1}</strong></div>
+          <div class="frame-box"><img id="live-f-${i}" src="" style="display:none"></div>
+          <div class="stats-row">
+            <div class="stat-box"><div class="stat-val" id="live-s-${i}">0</div><div class="stat-lbl">Steps</div></div>
+            <div class="stat-box"><div class="stat-val" id="live-m-${i}">0</div><div class="stat-lbl">Mean</div></div>
+            <div class="stat-box"><div class="stat-val">—</div><div class="stat-lbl">Goal</div></div>
           </div>
         </div>
-      </div>`;
-  }
-  html += '</div>';
-  area.innerHTML = html;
+      `).join('')}
+    </div>`;
 }
 
-function updateCard(i, s) {
-  const el = id => document.getElementById(id + i);
-  const ep = el('ep');  if (ep)  ep.textContent  = `Ep ${s.episode}`;
-  const sv = el('sv');  if (sv)  sv.textContent  = s.steps;
-  const mv = el('mv');  if (mv)  mv.textContent  = s.mean > 0  ? s.mean.toFixed(1) : '—';
-  const bv = el('bv');  if (bv)  bv.textContent  = s.best > 0  ? s.best : '—';
-  const card = document.getElementById('card' + i);
-  if (card) card.classList.toggle('fell', s.done);
+function renderFinalResults(summary) {
+  const container = document.getElementById('resultsTableContainer');
+  const best = Math.max(...summary.map(s => s.mean));
+  container.innerHTML = `
+    <table class="res-table">
+      <thead><tr><th>Model</th><th>Mean</th><th>Best</th><th>Worst</th><th>Success Rate</th></tr></thead>
+      <tbody>
+        ${summary.map(s => `
+          <tr>
+            <td><strong>${esc(s.label)}</strong>${s.mean === best ? '<span class="badge-best">TOP</span>' : ''}</td>
+            <td style="color:var(--accent); font-weight:700">${s.mean}</td>
+            <td>${s.best}</td>
+            <td>${s.worst}</td>
+            <td>${s.goal_rate}%</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`;
 }
 
-function showResults(summary) {
-  if (!summary?.length) return;
-  const bestMean = Math.max(...summary.map(s => s.mean));
-  let html = `<table>
-    <thead><tr>
-      <th>#</th><th>Model</th><th>Mean</th><th>Median</th>
-      <th>Best</th><th>Worst</th><th>≥195 steps</th>
-    </tr></thead><tbody>`;
-  summary.forEach((s, i) => {
-    const isBest = s.mean === bestMean;
-    const goalBadge = s.goal_rate >= 50
-      ? `<span class="badge-goal">${s.goal_rate}%</span>` : `${s.goal_rate}%`;
-    html += `<tr${isBest ? ' class="tr-best"' : ''}>
-      <td>${i + 1}</td>
-      <td><strong>${esc(s.label)}</strong>${isBest ? '<span class="badge-best">Best</span>' : ''}</td>
-      <td><strong>${s.mean}</strong></td>
-      <td>${s.median}</td>
-      <td>${s.best}</td>
-      <td>${s.worst}</td>
-      <td>${goalBadge}</td>
-    </tr>`;
-  });
-  html += '</tbody></table>';
-  document.getElementById('resBody').innerHTML = html;
-}
-
-function setStatus(t) { document.getElementById('statusTxt').textContent = t; }
-function setProgress(cur, total) {
-  document.getElementById('pFill').style.width = total ? (cur / total * 100) + '%' : '0';
-  document.getElementById('pTxt').textContent  = total ? `${cur} / ${total} ep` : '—';
-}
-
-/* ── Gameplay Comparison Charts ── */
-function generateGameplayCharts() {
-  if (!lastGameplaySummary || !lastGameplaySummary.length) {
-    alert('No gameplay data yet. Play some models first.');
-    return;
-  }
-  const body = document.getElementById('gpChartsBody');
-  const btn  = document.getElementById('gpChartBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Generating…';
-  body.innerHTML = '<div class="hint" style="padding:18px 0"><div class="spinner" style="width:24px;height:24px;border-width:2px"></div><div style="color:var(--muted);font-size:.82rem">Generating comparison charts…</div></div>';
-
-  const models = lastGameplaySummary.map(s => ({
-    label: s.label,
-    history: s.history,
-  }));
-
-  fetch('/api/gameplay-chart', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ models }),
-  })
-  .then(r => r.json())
-  .then(data => {
-    btn.disabled = false;
-    btn.innerHTML = '📊 Generate Charts';
-    if (data.error) {
-      body.innerHTML = `<div class="hint" style="padding:18px 0"><div style="color:var(--muted)">⚠️ ${esc(data.error)}</div></div>`;
-      return;
-    }
-    const charts = data.charts || [];
-    const ok = charts.filter(c => c.image);
-    const useCols2 = ok.length >= 2;
-    let html = `<div class="chart-grid${useCols2 ? ' cols-2' : ''}">`;
-    for (const c of charts) {
-      const title = c.title || c.chart_type;
-      html += `<div class="chart-card">`;
-      html += `<div class="chart-card-head">${esc(title)}</div>`;
-      if (c.image) {
-        html += `<img src="data:image/png;base64,${c.image}" alt="${esc(title)}">`;
-      } else {
-        html += `<div class="chart-error">⚠️ ${esc(c.error || 'No data')}</div>`;
-      }
-      html += `</div>`;
-    }
-    html += '</div>';
-    body.innerHTML = html;
-  })
-  .catch(err => {
-    btn.disabled = false;
-    btn.innerHTML = '📊 Generate Charts';
-    body.innerHTML = `<div class="hint" style="padding:18px 0"><div style="color:var(--muted)">⚠️ ${esc(err.message)}</div></div>`;
-  });
-}
-
-/* ══════════════════════════════════════════════════════════════════
-   CHARTS TAB
-   ══════════════════════════════════════════════════════════════════ */
-let chartsLoaded = false;
-let csvSelected  = new Set();
-let allCsvPaths  = [];
-let allCsvData   = [];      // full csv metadata from API
-let familyMap    = {};       // family -> [csv objects]
-
-const CHART_TYPES_NICE = {
-  training_curves:     'Training Curves',
-  training_curves_std: 'Training Curves (Mean ± Std)',
-  box_plot:            'Box Plot',
-  bar_chart:           'Bar Chart (Mean ± Std)',
-  histogram:           'Histogram',
-  convergence:         'Convergence Analysis',
-  success_rate:        'Success Rate Over Time',
-  improvement_speed:   'Learning Speed',
-  stability:           'Training Stability',
-  final_performance:   'Final Performance',
-  heatmap:             'Performance Heatmap',
-};
-
-const CHART_DESCRIPTIONS = {
-  training_curves:     'Rolling mean of episode length over training episodes for each selected model.',
-  training_curves_std: 'Mean ± standard deviation across seeds. CSVs with matching names (differing only by seed) are grouped automatically.',
-  box_plot:            'Box-and-whisker plot comparing the distribution of episode lengths across models.',
-  bar_chart:           'Bar chart showing mean episode length with standard deviation error bars.',
-  histogram:           'Overlaid histogram of episode length distributions for all selected models.',
-  convergence:         'Convergence speed analysis: first episode crossing performance thresholds (50, 100, 150, 195 steps).',
-  success_rate:        'Rolling percentage of episodes reaching the goal (≥195 steps). Shows how quickly each model learns to solve the task.',
-  improvement_speed:   'Rate of improvement per episode (derivative of rolling mean). Positive = getting better, negative = regressing.',
-  stability:           'Rolling standard deviation over time. Lower values indicate more consistent, stable training behavior.',
-  final_performance:   'Mean episode length of the last N episodes (N = rolling window) for each model family, averaged across seeds.',
-  heatmap:             'Color-coded matrix comparing all model families across key metrics: mean, median, max, std, success rate, and best window.',
-};
-
-function loadCsvList() {
-  chartsLoaded = true;
-  fetch('/api/csvs')
-    .then(r => r.json())
-    .then(csvs => {
-      allCsvData  = csvs;
-      allCsvPaths = csvs.map(c => c.path);
-      // Build family map
-      familyMap = {};
-      for (const c of csvs) {
-        if (!familyMap[c.family]) familyMap[c.family] = [];
-        familyMap[c.family].push(c);
-      }
-      renderCsvSidebar(csvs);
-    });
-}
-
-function renderCsvSidebar(csvs) {
-  const list = document.getElementById('csvList');
-  if (!csvs.length) {
-    list.innerHTML = '<div class="no-models">No CSV data found.<br>Run experiments first.</div>';
-    return;
-  }
-  // Group by "ep / category"
-  const tree = {};
-  for (const c of csvs) {
-    if (!tree[c.group]) tree[c.group] = [];
-    tree[c.group].push(c);
-  }
-  // Within each group, sub-group by family
-  let html = '';
-  for (const [group, items] of Object.entries(tree)) {
-    html += `<div class="grp-hdr">${esc(group)}</div>`;
-    // Collect families in this group
-    const families = {};
-    for (const c of items) {
-      if (!families[c.family]) families[c.family] = [];
-      families[c.family].push(c);
-    }
-    for (const [fam, members] of Object.entries(families)) {
-      if (members.length > 1) {
-        // Show a family group header with checkbox to select all seeds
-        const famLabel = members[0].label.replace(/ S\d+/i, '').replace(/\s+/g, ' ');
-        html += `<label class="grp-hdr-row" style="border-top:none;background:#f0f2ff;padding:5px 16px 2px;">
-          <input type="checkbox" data-family="${esc(fam)}" onchange="onFamilyToggle(this)">
-          <span>${esc(famLabel)} (${members.length} seeds)</span>
-        </label>`;
-      }
-      for (const c of members) {
-        html += `
-        <label class="model-item">
-          <input type="checkbox" value="${esc(c.path)}" data-family="${esc(c.family)}" onchange="onCsvToggle(this)">
-          <span>${esc(c.label)}</span>
-        </label>`;
-      }
-    }
-  }
-  list.innerHTML = html;
-}
-
-function onCsvToggle(cb) {
-  cb.checked ? csvSelected.add(cb.value) : csvSelected.delete(cb.value);
-  syncFamilyCheckbox(cb.dataset.family);
-  updateCsvCount();
-}
-
-function onFamilyToggle(cb) {
-  const fam = cb.dataset.family;
-  const checked = cb.checked;
-  document.querySelectorAll(`#csvList input[type=checkbox][value][data-family="${fam}"]`).forEach(c => {
-    c.checked = checked;
-    checked ? csvSelected.add(c.value) : csvSelected.delete(c.value);
-  });
-  updateCsvCount();
-}
-
-function syncFamilyCheckbox(fam) {
-  if (!fam) return;
-  const famCb = document.querySelector(`#csvList input[type=checkbox][data-family="${fam}"]:not([value])`);
-  if (!famCb) return;
-  const members = document.querySelectorAll(`#csvList input[type=checkbox][value][data-family="${fam}"]`);
-  const allChecked = [...members].every(c => c.checked);
-  const someChecked = [...members].some(c => c.checked);
-  famCb.checked = allChecked;
-  famCb.indeterminate = someChecked && !allChecked;
-}
-
-function updateCsvCount() {
-  document.getElementById('csvCountTxt').textContent = csvSelected.size + ' selected';
-}
-
-function toggleAllCsvs() {
-  const cbs = document.querySelectorAll('#csvList input[type=checkbox][value]');
-  const allChecked = csvSelected.size === allCsvPaths.length;
-  cbs.forEach(cb => {
-    cb.checked = !allChecked;
-    !allChecked ? csvSelected.add(cb.value) : csvSelected.delete(cb.value);
-  });
-  // Sync all family checkboxes
-  document.querySelectorAll('#csvList input[type=checkbox][data-family]:not([value])').forEach(cb => {
-    cb.checked = !allChecked;
-    cb.indeterminate = false;
-  });
-  updateCsvCount();
-}
-
-function getSelectedChartTypes() {
-  return [...document.querySelectorAll('#chartTypeList input[type=checkbox]:checked')].map(cb => cb.value);
-}
-
-function onChartTypeToggle() {
-  const n = getSelectedChartTypes().length;
-  document.getElementById('ctCountTxt').textContent = n + ' chart type' + (n !== 1 ? 's' : '') + ' selected';
-}
-
-function toggleAllChartTypes() {
-  const cbs = document.querySelectorAll('#chartTypeList input[type=checkbox]');
-  const allChecked = [...cbs].every(cb => cb.checked);
-  cbs.forEach(cb => cb.checked = !allChecked);
-  onChartTypeToggle();
-}
-
-function generateSelectedCharts() {
-  if (!csvSelected.size) { alert('Select at least one CSV first.'); return; }
-  const types = getSelectedChartTypes();
-  if (!types.length) { alert('Select at least one chart type.'); return; }
-
-  const win     = +document.getElementById('winSlider').value;
-  const display = document.getElementById('chartDisplay');
-  const status  = document.getElementById('chartStatus');
-  const btn     = document.getElementById('chartBtn');
-
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Generating…';
-  status.textContent = `Generating ${types.length} chart(s)…`;
-  display.innerHTML = '<div class="hint"><div class="spinner" style="width:32px;height:32px;border-width:3px"></div><div>Generating ' + types.length + ' chart(s)…</div></div>';
-
-  fetch('/api/multi-chart', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      csvs: [...csvSelected],
-      chart_types: types,
-      options: { window: win },
-    }),
-  })
-  .then(r => r.json())
-  .then(data => {
-    btn.disabled = false;
-    btn.innerHTML = '📊 Generate Charts';
-    if (data.error) {
-      status.textContent = 'Error: ' + data.error;
-      display.innerHTML = `<div class="hint"><div class="hint-icon">⚠️</div><div>${esc(data.error)}</div></div>`;
-      return;
-    }
-    const charts = data.charts || [];
-    const ok = charts.filter(c => c.image);
-    status.textContent = `Generated ${ok.length} / ${charts.length} chart(s) — ${csvSelected.size} CSV(s)`;
-
-    if (charts.length === 1 && ok.length === 1) {
-      // Single chart — display full-width without grid
-      const c = ok[0];
-      const title = CHART_TYPES_NICE[c.chart_type] || c.chart_type;
-      display.innerHTML = `<div class="chart-card"><div class="chart-card-head">${esc(title)}</div><img src="data:image/png;base64,${c.image}" alt="${esc(title)}"></div>`;
-    } else {
-      // Multi-chart grid
-      const useCols2 = ok.length >= 2;
-      let html = `<div class="chart-grid${useCols2 ? ' cols-2' : ''}">`;
-      for (const c of charts) {
-        const title = CHART_TYPES_NICE[c.chart_type] || c.chart_type;
-        html += `<div class="chart-card">`;
-        html += `<div class="chart-card-head">${esc(title)}</div>`;
-        if (c.image) {
-          html += `<img src="data:image/png;base64,${c.image}" alt="${esc(title)}">`;
-        } else {
-          html += `<div class="chart-error">⚠️ ${esc(c.error || 'No data')}</div>`;
-        }
-        html += `</div>`;
-      }
-      html += '</div>';
-      display.innerHTML = html;
-    }
-  })
-  .catch(err => {
-    btn.disabled = false;
-    btn.innerHTML = '📊 Generate Charts';
-    status.textContent = 'Error: ' + err.message;
-    display.innerHTML = `<div class="hint"><div class="hint-icon">⚠️</div><div>Request failed</div></div>`;
-  });
-}
+// Initial Load
+loadExperiments();
 </script>
 </body>
 </html>"""

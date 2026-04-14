@@ -193,7 +193,7 @@ def save_history(history: EpisodeHistory, experiment_dir: str,
 # Oracle training (automated)
 # ---------------------------------------------------------------------------
 
-def train(total_episodes: int, seed: int, feedback_weight: float = cfg.HCRL_FEEDBACK_WEIGHT) -> None:
+def train(total_episodes: int, seed: int, feedback_weight: float = cfg.HCRL_FEEDBACK_WEIGHT, save_id: int | None = None) -> None:
     """Train HCRL with simulated oracle feedback (no human required)."""
     out = pathlib.Path(cfg.experiment_dir(total_episodes, f"hcrl-oracle-fw{feedback_weight:g}"))
     out.mkdir(parents=True, exist_ok=True)
@@ -247,21 +247,22 @@ def train(total_episodes: int, seed: int, feedback_weight: float = cfg.HCRL_FEED
 
     env.close()
 
-    agent.save(out / f"hcrl_oracle_s{seed}_model.npz")
-    reward_model.save(out / f"hcrl_oracle_s{seed}_reward_model.npz")
-    save_history_csv(episode_lengths, out / f"hcrl_oracle_s{seed}_history.csv")
+    save_id = seed if save_id is None else save_id
+    agent.save(out / f"hcrl_oracle_s{save_id}_model.npz")
+    reward_model.save(out / f"hcrl_oracle_s{save_id}_reward_model.npz")
+    save_history_csv(episode_lengths, out / f"hcrl_oracle_s{save_id}_history.csv")
     print(f"\nSaved to {out}/  |  Total oracle feedback: {total_feedback}")
 
     _plot(episode_lengths, rm_losses, total_feedback,
-          f"HCRL (oracle) — {total_episodes} eps, seed={seed}, {total_feedback} signals",
-          "forestgreen", out / f"hcrl_oracle_s{seed}_results.png")
+          f"HCRL (oracle) — {total_episodes} eps, seed={seed} (saved as s{save_id}), {total_feedback} signals",
+          "forestgreen", out / f"hcrl_oracle_s{save_id}_results.png")
 
 
 # ---------------------------------------------------------------------------
 # Human training (interactive)
 # ---------------------------------------------------------------------------
 
-def train_human(total_episodes: int, seed: int, feedback_weight: float = cfg.HCRL_FEEDBACK_WEIGHT) -> None:
+def train_human(total_episodes: int, seed: int, feedback_weight: float = cfg.HCRL_FEEDBACK_WEIGHT, save_id: int | None = None) -> None:
     """Train HCRL with real human feedback via arrow keys."""
     out = pathlib.Path(cfg.experiment_dir(total_episodes, f"hcrl-human-fw{feedback_weight:g}"))
     out.mkdir(parents=True, exist_ok=True)
@@ -375,14 +376,15 @@ def train_human(total_episodes: int, seed: int, feedback_weight: float = cfg.HCR
         print("No episodes completed — nothing to save.")
         return
 
-    agent.save(out / f"hcrl_human_s{seed}_model.npz")
-    reward_model.save(out / f"hcrl_human_s{seed}_reward_model.npz")
-    save_history_csv(episode_lengths, out / f"hcrl_human_s{seed}_history.csv")
+    save_id = seed if save_id is None else save_id
+    agent.save(out / f"hcrl_human_s{save_id}_model.npz")
+    reward_model.save(out / f"hcrl_human_s{save_id}_reward_model.npz")
+    save_history_csv(episode_lengths, out / f"hcrl_human_s{save_id}_history.csv")
     print(f"\nSaved to {out}/  |  Total human feedback: {total_feedback}")
 
     _plot(episode_lengths, rm_losses, total_feedback,
-          f"HCRL (human) — {len(episode_lengths)} eps, seed={seed}, {total_feedback} signals",
-          "mediumseagreen", out / f"hcrl_human_s{seed}_results.png")
+          f"HCRL (human) — {len(episode_lengths)} eps, seed={seed} (saved as s{save_id}), {total_feedback} signals",
+          "mediumseagreen", out / f"hcrl_human_s{save_id}_results.png")
 
 
 # ---------------------------------------------------------------------------
@@ -440,9 +442,11 @@ if __name__ == "__main__":
                         help="Magnitude of +/- oracle reward signal (default: %(default)s)")
     parser.add_argument("--human",    action="store_true",
                         help="Use real human arrow-key feedback instead of simulated oracle")
+    parser.add_argument("--save-id",  type=int,   default=None,
+                        help="Override seed in filename (e.g. run with --seed 42 but save as s1)")
     args = parser.parse_args()
 
     if args.human:
-        train_human(args.episodes, args.seed, args.feedback_weight)
+        train_human(args.episodes, args.seed, args.feedback_weight, args.save_id)
     else:
-        train(args.episodes, args.seed, args.feedback_weight)
+        train(args.episodes, args.seed, args.feedback_weight, args.save_id)
