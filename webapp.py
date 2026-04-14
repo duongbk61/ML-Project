@@ -210,8 +210,10 @@ def stream_gameplay(model_paths: list[str], num_episodes: int, fps: int):
     try:
         for ep in range(num_episodes):
             observations, actions = [], []
+            # Use a fixed seed for each episode index so all models face the SAME starting state
+            ep_seed = 1000 + ep 
             for agent, env in zip(agents, envs):
-                obs, _ = env.reset()
+                obs, _ = env.reset(seed=ep_seed)
                 observations.append(obs)
                 actions.append(agent.begin_episode(obs))
 
@@ -997,12 +999,11 @@ def _gameplay_box_plot(models: list[dict]) -> str:
     for box, c in zip(bp["boxes"], colors):
         box.set_facecolor(c)
         box.set_alpha(0.55)
-    ax.axhline(y=195, color="gray", linestyle="--", alpha=0.5)
+    # Goal line removed as requested
     patches = [mpatches.Patch(facecolor=c, alpha=0.7, label=l) for c, l in zip(colors, labels)]
-    goal_line = plt.Line2D([0], [0], color="gray", linestyle="--", alpha=0.7, label="Goal: 195")
-    ax.set_title("Gameplay — Episode Length Distribution")
+    ax.set_title("Gameplay Performance Distribution")
     ax.set_ylabel("Episode Length")
-    ax.legend(handles=patches + [goal_line], fontsize=8, loc="best")
+    ax.legend(handles=patches, fontsize=8, loc="best")
     ax.grid(True, alpha=0.3)
     return _fig_to_base64(fig)
 
@@ -1119,29 +1120,29 @@ _GAMEPLAY_CHART_TYPES = {
 
 @app.route("/api/gameplay-chart", methods=["POST"])
 def api_gameplay_chart():
-    """Generate comparison charts from gameplay results data."""
+    """Generates comparison charts from live gameplay/simulation data."""
     data = request.get_json(force=True)
-    models = data.get("models", [])  # [{label, history: [int, ...]}, ...]
-    chart_types = data.get("chart_types", list(_GAMEPLAY_CHART_TYPES.keys()))
+    # Support both 'summary' (from live sim) and 'models' (from legacy/free play)
+    models = data.get("summary") or data.get("models")
+    chart_types = data.get("chart_types")
+    
+    if not models:
+        return jsonify({"error": "No data"}), 400
 
-    if not models or not any(m.get("history") for m in models):
-        return jsonify({"error": "No gameplay data"}), 400
+    # If simple request (just one image), return it directly for compatibility
+    if not chart_types:
+        return jsonify({"image": _gameplay_box_plot(models)})
 
+    # Else return multiple charts
     results = []
     for ct in chart_types:
-        if ct not in _GAMEPLAY_CHART_TYPES:
-            results.append({"chart_type": ct, "error": "Unknown chart type"})
-            continue
+        if ct not in _GAMEPLAY_CHART_TYPES: continue
         nice_name, fn = _GAMEPLAY_CHART_TYPES[ct]
         try:
             img = fn(models)
-            if img:
-                results.append({"chart_type": ct, "title": nice_name, "image": img})
-            else:
-                results.append({"chart_type": ct, "title": nice_name, "error": "No data"})
+            results.append({"chart_type": ct, "title": nice_name, "image": img})
         except Exception as exc:
             results.append({"chart_type": ct, "title": nice_name, "error": str(exc)})
-
     return jsonify({"charts": results})
 
 
@@ -1282,8 +1283,9 @@ header {
 .exp-header { padding: 1.5rem 2rem; border-bottom: 1px solid var(--border); background: rgba(15, 23, 42, 0.3); }
 .exp-header h2 { margin: 0; font-size: 1.4rem; color: var(--accent); }
 .exp-header .subtitle { color: var(--text-muted); font-size: 0.8rem; margin-top: 4px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; }
-.exp-body { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; padding: 2rem; }
-.exp-info p { color: #cbd5e1; line-height: 1.6; font-size: 0.95rem; margin-bottom: 1.5rem; }
+.exp-body { display: flex; flex-direction: column; gap: 2rem; padding: 2rem; }
+.exp-info { width: 100%; }
+.exp-info p { color: #cbd5e1; line-height: 1.6; font-size: 0.95rem; margin-bottom: 2rem; max-width: 800px; }
 
 .btn {
   padding: 0.7rem 1.4rem; border-radius: 10px; border: none; font-weight: 600;
@@ -1295,20 +1297,22 @@ header {
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Visualizer Cards */
-.vis-container { display: flex; flex-direction: column; gap: 1rem; }
-.vis-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
+.vis-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; margin-bottom: 1.5rem; }
 .mini-card {
-  background: rgba(15, 23, 42, 0.5); border-radius: 12px; border: 1px solid var(--border); padding: 8px;
-  text-align: center; display: flex; flex-direction: column;
+  background: rgba(15, 23, 42, 0.5); border-radius: 12px; border: 1px solid var(--border); padding: 12px;
+  text-align: center; display: flex; flex-direction: column; transition: transform 0.2s;
 }
-.mini-card .canvas-wrap { aspect-ratio: 4/3; background: #000; border-radius: 6px; margin-bottom: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.mini-card:hover { transform: translateY(-5px); border-color: var(--accent); }
+.mini-card .canvas-wrap { aspect-ratio: 4/3; background: #000; border-radius: 8px; margin-bottom: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
 .mini-card img { width: 100%; height: 100%; object-fit: cover; }
-.mini-card .label { font-size: 0.7rem; font-weight: 600; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mini-card .val { font-size: 1rem; font-weight: 700; color: var(--accent); border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
+.mini-card .label { font-size: 0.75rem; font-weight: 700; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini-card .val { font-size: 1.1rem; font-weight: 800; color: var(--accent); border-top: 1px solid var(--border); margin-top: 6px; padding-top: 6px; }
+
+.vis-container { display: flex; flex-direction: column; align-items: center; gap: 1.5rem; width: 100%; }
 
 /* Charts Area */
-.chart-area { min-height: 250px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.2); border-radius: 15px; border: 1px dashed var(--border); overflow: hidden; }
-.chart-area img { max-width: 100%; max-height: 100%; border-radius: 10px; transition: transform 0.3s; }
+.chart-area { min-height: 450px; width: 100%; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.3); border-radius: 15px; border: 1px solid var(--border); overflow: hidden; }
+.chart-area img { width: 100%; height: auto; max-height: 700px; object-fit: contain; }
 .chart-area img:hover { transform: scale(1.02); }
 
 /* Play Tab Specific */
@@ -1589,12 +1593,14 @@ function loadExperiments() {
                     </div>
                   `).join('')}
                 </div>
-                <button class="btn btn-primary" onclick="runExp('${exp.id}', this)">▶ Run Experiment</button>
+                <button class="btn btn-primary" onclick="runExp('${exp.id}', this)">▶ Run Experiment Simulation</button>
               </div>
             </div>
             <div class="exp-charts">
               <div class="chart-area" id="c-${exp.id}">
-                <div style="color:var(--text-muted); font-size:0.8rem">Simulation results will generate a comparison chart here.</div>
+                <div style="color:var(--text-muted); font-size:0.9rem; text-align:center; padding: 2rem;">
+                  <p>Click "Run" to view live evaluation results here.</p>
+                </div>
               </div>
             </div>
           </div>
@@ -1612,7 +1618,7 @@ function runExp(id, btn) {
   
   const p = new URLSearchParams();
   exp.actual_models.forEach(m => p.append('models', m.path));
-  p.set('episodes', 3);
+  p.set('episodes', 10);
   p.set('fps', 35);
 
   const eventSource = new EventSource('/api/play?' + p);
@@ -1627,11 +1633,33 @@ function runExp(id, btn) {
       });
     } else if (d.type === 'done') {
       eventSource.close();
-      btn.textContent = "✅ Completed";
-      fetchExpCharts(exp);
+      btn.textContent = "✅ Simulation Done";
+      fetchLiveChart(exp.id, d.summary);
     }
   };
   eventSource.onerror = () => { eventSource.close(); btn.disabled = false; btn.textContent = "▶ Run Experiment"; };
+}
+
+function fetchLiveChart(id, summary) {
+  fetch('/api/gameplay-chart', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ summary: summary })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.image) {
+      const area = document.getElementById('c-' + id);
+      const liveDiv = document.createElement('div');
+      liveDiv.innerHTML = `
+        <div style="margin-bottom: 2rem; border: 2px solid var(--accent); border-radius: 15px; overflow: hidden; background: rgba(56, 189, 248, 0.05)">
+          <div style="padding: 10px 20px; background: var(--accent); color: #000; font-weight: 800; font-size: 0.8rem">LIVE PERFORMANCE RESULTS (Current Evaluation)</div>
+          <img src="data:image/png;base64,${data.image}" style="width:100%; height:auto; display:block">
+        </div>
+      `;
+      area.prepend(liveDiv);
+    }
+  });
 }
 
 function fetchExpCharts(exp) {
