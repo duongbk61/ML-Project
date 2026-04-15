@@ -138,6 +138,13 @@ def scan_models() -> list[dict]:
     """Recursively find all QLearningAgent .npz files and return structured metadata."""
     if not RESULTS_DIR.exists():
         return []
+    
+    # Extract all relevant model identifiers from the EXPERIMENTS definitions
+    relevant_keys = []
+    for exp in EXPERIMENTS:
+        relevant_keys.extend([m.lower() for m in exp["models"]])
+    relevant_keys = set(relevant_keys)
+
     models = []
     for npz in sorted(RESULTS_DIR.rglob("*.npz")):
         if not _is_agent_model(npz):
@@ -145,8 +152,13 @@ def scan_models() -> list[dict]:
         rel = npz.relative_to(RESULTS_DIR)
         ep = next((p for p in rel.parts if re.match(r"ep\d+$", p)), "misc")
 
-        # Only show models matching our filter
+        # Basic EP filter
         if ep != EP_FILTER:
+            continue
+        
+        # New Filter: Only show models explicitly mentioned in Experiments
+        rel_path_str = str(rel).replace("\\", "/").lower()
+        if not any(k in rel_path_str for k in relevant_keys):
             continue
 
         category = npz.parent.name if npz.parent.name != RESULTS_DIR.name else "root"
@@ -412,6 +424,13 @@ def scan_csvs() -> list[dict]:
     """Find all *_history.csv files and return metadata."""
     if not RESULTS_DIR.exists():
         return []
+
+    # Extract all relevant model identifiers from the EXPERIMENTS definitions
+    relevant_keys = []
+    for exp in EXPERIMENTS:
+        relevant_keys.extend([m.lower() for m in exp["models"]])
+    relevant_keys = set(relevant_keys)
+
     csvs = []
     for p in sorted(RESULTS_DIR.rglob("*_history.csv")):
         try:
@@ -423,8 +442,14 @@ def scan_csvs() -> list[dict]:
         rel = p.relative_to(RESULTS_DIR)
         ep = next((part for part in rel.parts if re.match(r"ep\d+$", part)), "misc")
 
-        # Only show history files matching our filter
+        # Basic EP filter
         if ep != EP_FILTER:
+            continue
+
+        # New Filter: Only show history files explicitly mentioned in Experiments
+        # We strip _s0 etc. to match the base name if needed, but here we match against full keys
+        rel_path_str = str(rel).replace("\\", "/").lower()
+        if not any(k in rel_path_str for k in relevant_keys):
             continue
 
         category = p.parent.name if p.parent.name != RESULTS_DIR.name else "root"
