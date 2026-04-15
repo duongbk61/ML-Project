@@ -36,25 +36,25 @@ EP_FILTER = "ep200"  # Only show results from this episode count
 EXPERIMENTS = [
     {
         "id": "baseline_vs_hcrl",
-        "title": "Thí nghiệm 1: Baseline vs HCRL Full",
-        "subtitle": "Khả năng tăng tốc học tập của con người",
-        "description": "So sánh Q-Learning thuần thúy (Baseline) với phương pháp HCRL nhận phản hồi từ Oracle và Human. Mục tiêu là chứng minh sự can thiệp của con người giúp Agent ổn định nhanh hơn.",
+        "title": "Experiment 1: Baseline vs HCRL Full",
+        "subtitle": "Human-in-the-Loop Learning Acceleration",
+        "description": "Comparing standard Q-Learning (Baseline) against the HCRL method with Oracle/Human feedback. The goal is to demonstrate how human intervention significantly stabilizes the agent faster than autonomous learning.",
         "models": ["baseline_s0", "full_feedback_s0", "hcrl_human_s0"],
         "chart_types": ["training_curves", "box_plot"],
     },
     {
         "id": "timing",
-        "title": "Thí nghiệm 2: Tác động của Thời điểm (Timing)",
-        "subtitle": "Can thiệp sớm hay muộn thì hiệu quả hơn?",
-        "description": "Chúng ta chia giai đoạn huấn luyện thành các cửa sổ: Early (0-20%), Mid (40-60%) và Late (80-100%). Thí nghiệm tìm ra 'Golden Window' để can thiệp hiệu quả nhất.",
+        "title": "Experiment 2: Impact of Intervention Timing",
+        "subtitle": "Early vs. Mid vs. Late Intervention",
+        "description": "Training is divided into windows: Early (0-20%), Mid (40-60%), and Late (80-100%). This experiment identifies the 'Golden Window' for the most efficient human guidance.",
         "models": ["early_s0", "mid_s0", "late_s0"],
         "chart_types": ["convergence", "success_rate"],
     },
     {
         "id": "weight_sensitivity",
-        "title": "Thí nghiệm 3: Độ nhạy của Trọng số (Weight Sensitivity)",
-        "subtitle": "Trọng số feedback bao nhiêu là tối ưu?",
-        "description": "So sánh tác động của giá trị phần thưởng từ con người (Feedback Weight) ở các mức 5, 20, và 50. Thí nghiệm này kiểm tra xem việc tăng cường độ tín hiệu khen/chê có giúp model học nhanh hơn không.",
+        "title": "Experiment 3: Weight Sensitivity Analysis",
+        "subtitle": "Optimizing Feedback Reward Intensity",
+        "description": "Investigating how different feedback weights (5, 20, 50) affect learning dynamics. This experiment examines if higher reward intensity leads to faster policy convergence.",
         "models": ["fw5/hcrl_oracle_s0", "fw20/hcrl_oracle_s0", "fw50/hcrl_oracle_s0"],
         "chart_types": ["training_curves", "box_plot"],
     }
@@ -129,7 +129,7 @@ def _is_agent_model(npz: pathlib.Path) -> bool:
         return False
     try:
         with np.load(npz) as data:
-            return "q_table" in data
+            return "q_table" in data or "q_h_table" in data
     except Exception:
         return False
 
@@ -197,7 +197,12 @@ def stream_gameplay(model_paths: list[str], num_episodes: int, fps: int):
                 f"{p.name} is not a QLearningAgent model (missing q_table). "
                 "Reward model .npz files cannot be played in the web visualizer."
             )
-        agents.append(QLearningAgent.load(p))
+        # Dynamic loading based on model type
+        if "vi_tamer" in p.name.lower():
+            from cartpole.agents import VITAMERAgent
+            agents.append(VITAMERAgent.load(p))
+        else:
+            agents.append(QLearningAgent.load(p))
         envs.append(gym.make("CartPole-v1", render_mode="rgb_array", max_episode_steps=500))
         labels.append(make_label(p))
 
@@ -991,7 +996,7 @@ _GAMEPLAY_CHART_COLORS = [
 
 def _gameplay_box_plot(models: list[dict]) -> str:
     n = len(models)
-    fig, ax = plt.subplots(figsize=(max(8, n * 2), 6))
+    fig, ax = plt.subplots(figsize=(max(8, n * 2), 6)) 
     data = [m["history"] for m in models]
     labels = [m["label"] for m in models]
     colors = [_GAMEPLAY_CHART_COLORS[i % len(_GAMEPLAY_CHART_COLORS)] for i in range(n)]
