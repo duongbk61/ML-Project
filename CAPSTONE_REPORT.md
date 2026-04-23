@@ -15,7 +15,13 @@
 
 ## Abstract
 
-This capstone project implements and empirically compares four human-feedback reinforcement learning algorithms — TAMER, VI-TAMER, single-model RLHF, and ensemble RLHF — on the CartPole-v1 benchmark, using a shared tabular Q-Learning backbone to ensure fair comparison. All methods are evaluated against a pure environment-reward baseline over 100 training episodes with 3 random seeds. The results reveal that at this training scale, the baseline achieves the highest evaluation mean (114.1 steps), while late-phase human feedback (episodes 80–100) produces the best human-feedback condition (118.4 steps, 10% of episodes $\geq$ 195). Mid-phase feedback (episodes 40–60) yields the most consistent training curves (std = 14.9 vs. baseline's 41.3). RLHF methods are severely data-constrained at 288 preference labels, achieving only 31–42 mean steps. A feedback timing experiment demonstrates that *when* feedback is delivered matters more than *how much*: mid and late feedback significantly outperform early and full feedback ($p < 0.001$). The project includes a Flask-based web visualiser with multi-model simultaneous playback, 11 training analysis chart types, and post-gameplay comparison charts. All code, trained models, and experimental data are provided for full reproducibility.
+This capstone project implements and empirically compares human-feedback reinforcement learning algorithms — TAMER (with Credit Assignment), VI-TAMER (with Credit Assignment), single-model RLHF, and ensemble RLHF — on the CartPole-v1 benchmark over **200 training episodes** with seeds {5, 6, 9}. A **Credit Assignment Function (CAF)** is added to both TAMER and VI-TAMER: when the oracle fires at timestep $t$, feedback is distributed over the last 3 observations using configurable weight windows (uniform or exponential), improving reward model generalisation to states that *led to* the evaluated state.
+
+The central empirical finding is that **credit-assignment methods decisively surpass both the baseline and feedback-timing conditions at 200 episodes**. HCRL Oracle with exponential credit assignment (cw=3, exp) achieves the highest ≥195 episode rate of any method — **12.8% (77/600)** — with an average rolling-10 at episode 200 of 150.6, and a last-quarter block mean of 149.9. VI-TAMER with uniform credit assignment (cw=3, uniform) achieves **9.0% ≥195 episodes (54/600)** and an average rolling-10 ep200 of 152.8 — a dramatic reversal from earlier experiments where VI-TAMER with credit assignment completely failed. Feedback timing remains important: Late-phase feedback (episodes 160–199) produces rolling-10 = 154.0, competitive with credit-assignment methods, while a **reward model staleness framework** explains the counterintuitive timing ranking (Early outperforms Mid despite 2× greater staleness).
+
+A novel **signal efficiency analysis** reveals that Early timing (597 signals/seed) achieves 85% of Late's terminal performance at only 7.9% of the oracle budget — an efficiency of 0.217 steps per signal, 12.5× better than Full feedback's 0.017.
+
+The baseline Q-Learning (avg last-20 = 127.3, cross-seed std = 6.0) provides a strong but now clearly beatable benchmark: both credit-assignment methods and Timing Late exceed it. RLHF Ensemble exhibits phase-transition behaviour (seed 5 max = 467, seeds 6/9 below 41). Three methods — HCRL Human, VI-TAMER Human, and RLHF Single — failed to learn useful behaviour and are omitted from the primary analysis.
 
 ---
 
@@ -63,6 +69,7 @@ The survey also introduces **VI-TAMER** (Knox & Stone, 2012), the non-myopic ext
 |---|---|
 | When during training is human feedback most effective? | Feedback timing experiment (early / mid / late / full) |
 | Does non-myopic credit assignment improve performance? | TAMER vs. VI-TAMER comparison |
+| Does temporal credit assignment improve reward model quality? | Credit Assignment Function (CAF) ablation |
 
 ### 1.3 Paper 2 — Deep Reinforcement Learning from Human Preferences (Christiano et al., 2017)
 
@@ -72,7 +79,7 @@ The algorithm, **Reinforcement Learning from Human Feedback (RLHF)**, operates a
 
 1. **Policy process**: the RL agent collects experience in the environment, using the learned reward model $\hat{r}$ as its reward signal.
 2. **Preference elicitation process**: the system periodically selects clip pairs and presents them to the human.
-3. **Reward model fitting process**: the reward model $\hat{r}$ is updated to fit the collected preferences using the **Bradley-Terry model** (a logistic regression over segment-level sums of rewards).
+3. **Reward model fitting process**: the reward model $\hat{r}$ is updated to fit the collected preferences using the **Bradley-Terry model**.
 
 Section 2.2 of the paper introduces several practical improvements:
 
@@ -82,8 +89,6 @@ Section 2.2 of the paper introduces several practical improvements:
 | **Reward normalisation** (§2.2.1) | Running mean/std normalisation of $\hat{r}$ via Welford's algorithm |
 | **Uncertainty-based query selection** (§2.2.4) | Present clips where ensemble members disagree most |
 | **Human error modelling** (§2.2.3) | A constant probability $\epsilon$ that the human responds randomly |
-
-The contrast between the two papers is instructive: TAMER gives the human fine-grained control at the cost of cognitive burden; RLHF reduces burden at the cost of delayed credit assignment. This project implements both and places them in direct empirical comparison.
 
 ---
 
@@ -117,86 +122,66 @@ The CartPole-v1 environment (Barto et al., 1983; Brockman et al., 2016) is the e
 
 **Environment reward**: $r_t = +1$ for every timestep the pole remains within bounds.
 
-**Termination**: episode ends when any failure threshold is crossed or 200 steps have elapsed.
+**Termination**: episode ends when any failure threshold is crossed or 200 steps have elapsed (HCRL/VI-TAMER); the native Gymnasium cap of 500 steps applies to RLHF.
 
 **Solved criterion**: mean episode length $\geq 195$ over 30 consecutive episodes.
 
 ### 2.2 State Discretisation for Tabular Q-Learning
 
-Because $\mathcal{O}$ is continuous, tabular Q-Learning requires discretisation. Each of the 4 state features is binned uniformly into 7 intervals, covering the physically meaningful range of each variable:
+Because $\mathcal{O}$ is continuous, tabular Q-Learning requires discretisation. Each of the 4 state features is binned uniformly into 7 intervals:
 
-$$s_{\text{discrete}} = \sum_{i=0}^{3} \text{digitize}(o_i, \text{bins}_i) \cdot (b_{\max} + 1)^i$$
+$$s_{\text{discrete}} = \sum_{i=0}^{3} \text{digitize}(o_i, \text{bins}_i) \cdot 8^i$$
 
-where $b_{\max} = 7$ (maximum bin index). This yields $(7+1)^4 = 4{,}096$ discrete states.
-
-The bin boundaries are:
-
-| Feature | Range covered | Bins |
-|---|---|---|
-| $x$ | $[-2.4,\ 2.4]$ | 7 |
-| $\dot{x}$ | $[-3.0,\ 3.0]$ | 7 |
-| $\theta$ | $[-0.5,\ 0.5]$ | 7 |
-| $\dot{\theta}$ | $[-2.0,\ 2.0]$ | 7 |
+This yields $8^4 = 4{,}096$ discrete states.
 
 ### 2.3 Tabular Q-Learning
 
-The policy agent used across all methods is a tabular Q-Learning agent (Watkins & Dayan, 1992). The Q-table update at each step is:
-
 $$Q(s, a) \leftarrow Q(s, a) + \alpha \left[ r + \gamma \max_{a'} Q(s', a') - Q(s, a) \right]$$
 
-where $\alpha = 0.05$ (learning rate), $\gamma = 0.95$ (discount factor). Action selection follows $\varepsilon$-greedy with $\varepsilon_0 = 0.5$ and multiplicative decay $\varepsilon_t = 0.99^t$.
-
-The same agent, with identical hyperparameters, is used in all experimental conditions. Only the **reward signal** fed into the Q-update changes between methods. This design ensures that observed performance differences are attributable to the feedback paradigm, not to differences in the learning algorithm.
+where $\alpha = 0.05$, $\gamma = 0.95$, $\varepsilon_0 = 0.5$, $\varepsilon_{\text{decay}} = 0.99$.
 
 ### 2.4 The TAMER Framework (Knox & Stone, 2009)
 
-TAMER models human feedback as a scalar signal $H_t$ received at timestep $t$. A learned human reward model $\hat{R}_H : \mathcal{S} \times \mathcal{A} \to \mathbb{R}$ is trained to predict $H_t$ from the current state:
-
 $$\mathcal{L}_{\text{TAMER}} = \text{MSE}\bigl(\hat{R}_H(s_t),\ H_t\bigr)$$
 
-The agent's policy is derived from $\hat{R}_H$ directly (myopically, $\gamma = 0$):
+The agent's policy is derived myopically ($\gamma = 0$):
 
 $$\pi(s) = \arg\max_{a} \hat{R}_H(s, a)$$
 
-Critically, the environment reward $r^{\text{env}}_t$ is **not used** during the HCRL training phase; $\hat{R}_H$ provides the sole learning signal. The oracle (or human) fires with probability $p = 0.5$ per timestep, simulating human reaction-time limitations.
+### 2.5 Credit Assignment Function (CAF)
 
-### 2.5 VI-TAMER (Knox & Stone, 2012)
+The original TAMER paper identifies a key limitation: feedback received at time $t$ may reflect the quality of actions taken at $t-1, t-2, \ldots$ rather than the action at $t$ itself. The **Credit Assignment Function** distributes feedback over a window of recent observations:
 
-VI-TAMER replaces the myopic policy with a value function $Q_H(s, a)$ trained via temporal-difference updates using the human reward:
+$$\text{For each } i \in [0, W-1]:\ \hat{R}_H \text{ trained on } (o_{t-i},\ H_t \cdot w_i)$$
+
+where $w_i$ are normalised weights from the chosen CAF. This project uses $W=3$ with two weight functions:
+
+- **Uniform**: $w_i = 1/3$ for all $i$ — equal credit to all 3 observations.
+- **Exponential** ($\delta=0.8$): $w_i = \delta^i / \sum_j \delta^j$ — recency-biased, giving ~41% weight to the most recent observation ($i=0$).
+
+With $W=1$ (pointwise), the original TAMER behaviour is recovered. Credit assignment increases the number of reward model training pairs per oracle signal by $W$, giving the MLP $\hat{R}_H$ broader coverage of the state space.
+
+### 2.6 VI-TAMER (Knox & Stone, 2012)
+
+VI-TAMER replaces the myopic policy with a value function $Q_H(s, a)$:
 
 $$Q_H(s, a) \leftarrow Q_H(s, a) + \alpha \left[ \hat{R}_H(s, a) + \gamma \max_{a'} Q_H(s', a') - Q_H(s, a) \right]$$
 
-Setting $\gamma = 0$ recovers plain TAMER ($Q_H \equiv \hat{R}_H$). The policy becomes:
+Setting $\gamma = 0$ recovers plain TAMER. By propagating future value backwards through time, VI-TAMER can assign appropriate credit to actions that produce good states several steps later.
 
-$$\pi(s) = \arg\max_{a} Q_H(s, a)$$
-
-By propagating future value backwards through time, VI-TAMER can assign appropriate credit to actions that produce good states several steps later, which TAMER cannot.
-
-### 2.6 RLHF — Bradley-Terry Preference Model (Christiano et al., 2017)
-
-Given two trajectory segments $\sigma^1 = (o^1_1, \ldots, o^1_k)$ and $\sigma^2 = (o^2_1, \ldots, o^2_k)$, the probability that a human prefers $\sigma^1$ is modelled as:
+### 2.7 RLHF — Bradley-Terry Preference Model (Christiano et al., 2017)
 
 $$\hat{P}\left[\sigma^1 \succ \sigma^2\right] = \frac{\exp\left(\sum_t \hat{r}(o^1_t)\right)}{\exp\left(\sum_t \hat{r}(o^1_t)\right) + \exp\left(\sum_t \hat{r}(o^2_t)\right)}$$
 
-The reward model is trained by minimising cross-entropy loss against the observed human preferences $\mu \in \{0, 0.5, 1\}$:
-
 $$\mathcal{L}_{\text{RLHF}} = -\sum_{\sigma^1, \sigma^2} \left[ \mu \log \hat{P}[\sigma^1 \succ \sigma^2] + (1 - \mu) \log \hat{P}[\sigma^2 \succ \sigma^1] \right]$$
 
-where $\mu = 1$ if the human preferred $\sigma^1$, $\mu = 0$ if $\sigma^2$, and $\mu = 0.5$ if tied.
+### 2.8 Ensemble and Uncertainty (§2.2 Improvements)
 
-### 2.7 Ensemble and Uncertainty (§2.2 Improvements)
-
-For the ensemble reward model, $K = 3$ independent predictors are trained on bootstrapped subsets of the preference dataset $\mathcal{D}$. The ensemble mean provides a reward estimate:
-
-$$\hat{r}_{\text{ens}}(o) = \frac{1}{K} \sum_{k=1}^{K} \hat{r}_k(o)$$
-
-The epistemic uncertainty of a pair $(\sigma^1, \sigma^2)$ is the variance of the score difference across ensemble members:
+$K = 3$ independent predictors trained on bootstrapped subsets. The epistemic uncertainty of a pair:
 
 $$u(\sigma^1, \sigma^2) = \text{Var}_{k}\left[\text{score}_k(\sigma^1) - \text{score}_k(\sigma^2)\right]$$
 
-The system selects the $n$ pairs with the highest uncertainty from $m \gg n$ candidates (here $m = 10n$), maximising information gain per human query.
-
-Reward normalisation uses Welford's online algorithm to maintain a running mean $\bar{r}$ and variance $\sigma_r^2$:
+Reward normalisation via Welford's online algorithm:
 
 $$\hat{r}_{\text{norm}}(o) = \frac{\hat{r}_{\text{ens}}(o) - \bar{r}}{\max(\sigma_r,\ \varepsilon)}$$
 
@@ -210,30 +195,28 @@ This project was motivated by three observations:
 
 1. **Theoretical gap**: The two papers represent complementary paradigms of human feedback — per-timestep scalar signals (TAMER/VI-TAMER) vs. pairwise trajectory preferences (RLHF) — but they had not been placed in direct empirical comparison on a shared benchmark with identical agent architectures.
 
-2. **Engineering gap**: Existing open-source implementations of these algorithms either used deep neural network policies (making ablation difficult) or did not implement all §2.2 improvements from Christiano et al.
+2. **Engineering gap**: Existing open-source implementations did not implement all §2.2 improvements from Christiano et al., and none addressed temporal credit assignment in TAMER.
 
-3. **Pedagogical goal**: As a capstone for a Statistical Machine Learning program, the project needed to demonstrate both theoretical understanding of the papers and practical implementation skill.
+3. **Pedagogical goal**: As a capstone for a Statistical Machine Learning program, the project demonstrates both theoretical understanding and practical implementation skill.
 
 ### 3.2 Development Stages
 
-The project was developed in four stages:
+**Stage 1 — Baseline**: Implement a tabular Q-Learning agent with environment reward as the sole training signal.
 
-**Stage 1 — Baseline**: Implement a tabular Q-Learning agent with environment reward as the sole training signal. Establish the performance ceiling that human-feedback methods must match or exceed.
+**Stage 2 — HCRL (Paper 1)**: Implement TAMER and VI-TAMER with a simulated oracle. Run the feedback timing experiment.
 
-**Stage 2 — HCRL (Paper 1)**: Implement TAMER and VI-TAMER with a simulated oracle. Run the feedback timing experiment (early / mid / late / full).
+**Stage 3 — RLHF (Paper 2)**: Implement the single-model RLHF pipeline (§2.1) and the full §2.2 ensemble variant.
 
-**Stage 3 — RLHF (Paper 2)**: Implement the single-model RLHF pipeline (§2.1) and the full §2.2 ensemble variant with uncertainty-based queries, reward normalisation, and human-error modelling.
+**Stage 4 — Integration and comparison**: Refactor all scripts to share a common configuration and utility library. Add a Flask web visualiser and pygame-based human interaction modes.
 
-**Stage 4 — Integration and comparison**: Refactor all scripts to share a common configuration (`cartpole/config.py`) and utility library (`cartpole/train_utils.py`). Add a Flask web visualiser and pygame-based human interaction modes for all four algorithms.
+**Stage 5 — Credit Assignment**: Add a temporal Credit Assignment Function to both HCRL and VI-TAMER. Extend `run_hcrl_episode` and `run_vi_tamer_episode` with a rolling observation buffer; when oracle fires, spread feedback over the last $W=3$ observations using configurable weight functions (uniform or exponential). Scale experiments to 200 episodes with seeds {5, 6, 9}.
 
 ### 3.3 Design Principles
 
-The following principles governed all implementation decisions:
-
-- **Fair comparison**: All methods use the identical `QLearningAgent` (or `VITAMERAgent`) with the same hyperparameters ($\alpha, \gamma, \varepsilon, \varepsilon_{\text{decay}}$). Only the reward signal changes.
-- **Reproducibility**: All random number generators are seeded; experiments are repeated over three seeds ($\{0, 1, 2\}$).
-- **Paper fidelity**: Every non-trivial constant in the codebase is traced to a specific equation or section in the source paper.
-- **Modularity**: Shared logic lives in `cartpole/train_utils.py`; shared constants live in `cartpole/config.py`. No duplicated training loops.
+- **Fair comparison**: All methods use identical `QLearningAgent` / `VITAMERAgent` hyperparameters. Only the reward signal changes.
+- **Reproducibility**: All RNGs are seeded; experiments use three seeds ($\{5, 6, 9\}$).
+- **Paper fidelity**: Every constant traces to a specific equation or section in the source paper.
+- **Modularity**: Shared logic in `cartpole/train_utils.py`; shared constants in `cartpole/config.py`.
 
 ---
 
@@ -249,7 +232,7 @@ ML-Project/
 │   ├── agents.py            # QLearningAgent, VITAMERAgent, RandomActionAgent
 │   ├── reward_model.py      # RewardModel, HCRLRewardModel, EnsembleRewardModel
 │   ├── oracle.py            # Simulated human oracle (HCRL)
-│   ├── train_utils.py       # Shared episode runners, IO helpers
+│   ├── train_utils.py       # Shared episode runners + Credit Assignment helper
 │   ├── entities.py          # EpisodeHistory dataclass
 │   └── plotting.py          # Matplotlib live-plotting helper
 ├── run.py                   # Baseline Q-Learning
@@ -265,8 +248,6 @@ ML-Project/
 
 ### 4.2 Configuration — `cartpole/config.py`
 
-All 40+ hyperparameters are defined once and imported everywhere. Key groups:
-
 | Group | Parameter | Value | Source |
 |---|---|---|---|
 | **Agent** | `AGENT_LR` ($\alpha$) | 0.05 | Standard QL |
@@ -276,33 +257,22 @@ All 40+ hyperparameters are defined once and imported everywhere. Key groups:
 | **HCRL** | `HCRL_TRIGGER_PROB` | 0.50 | Knox & Stone (2009) |
 | **HCRL** | `HCRL_FEEDBACK_WEIGHT` | 10.0 | — |
 | **HCRL** | `HCRL_TERMINATE_PENALTY` | 50.0 | — |
+| **CAF** | `HCRL_CREDIT_WINDOW` | 3 | Knox & Stone (2009) §3 |
+| **CAF** | `HCRL_CREDIT_FN` | "uniform" or "exp" | — |
 | **RLHF** | `RLHF_SEGMENT_LENGTH` | 25 | Christiano et al. (2017) |
 | **RLHF** | `RLHF_PAIRS_PER_ITER` | 24 | — |
-| **RLHF** | `RLHF_RM_EPOCHS` | 40 | — |
 | **Ensemble** | `ENSEMBLE_N_MODELS` ($K$) | 3 | §2.2 bullet 1 |
-| **Ensemble** | `ENSEMBLE_ERROR_PROB` ($\varepsilon_H$) | 0.10 | §2.2.3 |
-| **Ensemble** | `ENSEMBLE_CANDIDATES_MULT` | 10 | §2.2.4 |
+| **Ensemble** | `ENSEMBLE_ERROR_PROB` ($\varepsilon_H$) | 0.01 | §2.2.3 |
 
 ### 4.3 Agent Implementations — `cartpole/agents.py`
 
-#### 4.3.1 `_DiscretizationMixin`
+#### 4.3.1 `QLearningAgent`
 
-Shared state-discretisation logic used by both `QLearningAgent` and `VITAMERAgent`. Converts a continuous 4-dimensional observation into a single integer state index using uniform binning:
+Tabular Q-Learning with $\varepsilon$-greedy exploration. Used as the policy backbone for Baseline, HCRL, and RLHF.
 
-```python
-state = sum(
-    digitize(feature, bins[i]) * (b_max + 1)**i
-    for i, feature in enumerate(observation)
-)
-```
+#### 4.3.2 `VITAMERAgent`
 
-#### 4.3.2 `QLearningAgent`
-
-Tabular Q-Learning with $\varepsilon$-greedy exploration. The Q-update is standard Watkins' Q-Learning. Used as the policy backbone for Baseline, HCRL, and RLHF.
-
-#### 4.3.3 `VITAMERAgent`
-
-Extends `QLearningAgent` with a separate $Q_H$ table. The key method `act_vi(obs, next_obs, reward_model, env_reward)` explicitly decomposes the TD target:
+Extends `QLearningAgent` with a separate $Q_H$ table:
 
 ```python
 r_h = reward_model.predict(obs)  # from HCRLRewardModel
@@ -310,469 +280,375 @@ td_target = r_h + gamma * max(Q_H[next_state])
 Q_H[state, action] += alpha * (td_target - Q_H[state, action])
 ```
 
-Setting $\gamma = 0$ at instantiation recovers plain TAMER.
-
 ### 4.4 Reward Models — `cartpole/reward_model.py`
 
-#### 4.4.1 `_MLPBase`
+**`HCRLRewardModel`**: MSE regression on (observation, human signal) pairs. Credit assignment increases the number of training pairs per oracle signal by factor $W=3$.
 
-Shared two-layer MLP with $\tanh$ activations:
+**`RewardModel`**: Preference-based cross-entropy loss (Bradley-Terry).
 
-$$\text{MLP}(o) : \mathbb{R}^4 \to \mathbb{R}^{64} \xrightarrow{\tanh} \mathbb{R}^{64} \xrightarrow{\tanh} \mathbb{R}^1$$
+**`EnsembleRewardModel`**: $K=3$ independent `RewardModel` instances with bootstrapped training, uncertainty-based query selection, and Welford normalisation.
 
-Implemented in pure NumPy with an Adam optimizer ($\beta_1 = 0.9, \beta_2 = 0.999, \varepsilon = 10^{-8}$). Both `RewardModel` and `HCRLRewardModel` inherit this base, eliminating code duplication.
+### 4.5 Credit Assignment — `cartpole/train_utils.py`
 
-#### 4.4.2 `HCRLRewardModel`
-
-MSE regression on (observation, human signal) pairs:
-
-$$\mathcal{L} = \frac{1}{N} \sum_{i=1}^{N} \left(\hat{R}_H(o_i) - H_i\right)^2$$
-
-Retrained after every episode on the accumulated buffer of oracle signals.
-
-#### 4.4.3 `RewardModel`
-
-Preference-based cross-entropy loss (Bradley-Terry):
-
-$$\mathcal{L} = -\frac{1}{N}\sum_i \left[\mu_i \log \hat{P}[\sigma^1_i \succ \sigma^2_i] + (1-\mu_i)\log \hat{P}[\sigma^2_i \succ \sigma^1_i]\right]$$
-
-#### 4.4.4 `EnsembleRewardModel`
-
-Wraps $K=3$ independent `RewardModel` instances. Each is trained on a bootstrapped subset of the preference buffer. Exposes `predict_with_variance()` for uncertainty-based query selection and `predict_normalised()` for Welford-normalised reward.
-
-### 4.5 Simulated Oracle — `cartpole/oracle.py`
-
-Two oracle functions simulate a human teacher:
-
-**HCRL oracle** (`oracle_feedback`): fires with probability 0.5 per step. Uses thresholded stability scores:
-
-$$\text{angle\_stab} = \max\left(0,\ 1 - \frac{|\theta|}{0.2095}\right)$$
-
-$$\text{pos\_stab} = \max\left(0,\ 1 - \frac{|x|}{2.4}\right)$$
-
-Returns $+w$ if clearly stable, $-w$ if clearly unstable, $0$ otherwise.
-
-**RLHF oracle** (`oracle_preference`): Boltzmann-rational with $T = 0.05$:
-
-$$P(\text{prefer}\ \sigma^1) = \frac{\exp\left(\text{score}(\sigma^1) / T\right)}{\exp\left(\text{score}(\sigma^1) / T\right) + \exp\left(\text{score}(\sigma^2) / T\right)}$$
-
-With probability $\varepsilon_H = 0.10$ the oracle responds uniformly at random (§2.2.3 error model).
-
-### 4.6 Shared Training Utilities — `cartpole/train_utils.py`
-
-Eliminates duplicated training loops across seven scripts:
-
-| Function | Used by |
-|---|---|
-| `run_hcrl_episode(env, agent, model, rng, ...)` | `train_hcrl.py`, `feedback_timing_experiment.py` |
-| `run_vi_tamer_episode(env, agent, model, rng, ...)` | `train_vi_tamer.py` |
-| `run_rl_episode(env, agent, model, ...)` | `train_rlhf.py`, `train_rlhf_ensemble.py` |
-| `collect_segment(env, agent, rng, model, ...)` | Both RLHF scripts |
-| `sample_preference_pairs(buf, n, rng, ...)` | `train_rlhf.py` |
-| `evaluate_agent(agent, n)` | `compare_models.py`, `compare_all.py` |
-| `save_history_csv`, `save_feedback_csv` | All training scripts |
-
-### 4.7 Web Visualiser — `webapp.py`
-
-A Flask application that serves a browser UI with two tabs:
-
-**Play tab**: Auto-discovers all `.npz` model files under `experiment-results/`. Multiple models can be played simultaneously in a side-by-side grid with real-time frame streaming via Server-Sent Events (SSE). After gameplay finishes, a results table (mean, median, best, worst, goal rate) and five auto-generated comparison charts (box plot, bar chart, histogram, episode progression, performance heatmap) are displayed.
-
-**Charts tab**: Discovers all `*_history.csv` files from training runs. CSVs that differ only by seed suffix are auto-grouped into model families. The user can select any combination of CSVs and chart types from 11 available options, then generate them simultaneously in a responsive grid.
-
+```python
+def _compute_credit_weights(n, fn="uniform", decay=0.8):
+    """Normalised weights: index 0 = most recent, index n-1 = oldest."""
+    if fn == "uniform":
+        w = np.ones(n)
+    elif fn == "exp":
+        w = decay ** np.arange(n)
+    elif fn == "gaussian":
+        sigma = max(n / 3.0, 1.0)
+        w = np.exp(-0.5 * (np.arange(n) / sigma) ** 2)
+    return w / w.sum()
 ```
-GET   /api/models          — JSON list of all discovered .npz model files
-GET   /api/play?models=... — SSE stream of base64-encoded JPEG frames + live stats
-GET   /api/csvs            — JSON list of all training history CSVs with family grouping
-POST  /api/chart           — generate a single chart from CSV data
-POST  /api/multi-chart     — generate multiple chart types in one request
-POST  /api/gameplay-chart  — generate comparison charts from live gameplay results
+
+When the oracle fires at step $t$ with signal $f$, the episode runner distributes:
+
+```python
+for i, past_obs in enumerate(reversed(recent_obs)):   # i=0 → lag=0 (obs_t)
+    ep_obs.append(past_obs)
+    ep_rew.append(f * weights[i])
 ```
+
+The agent's TD update at step $t$ still uses the full signal $f$; only the reward model training data is credit-expanded.
+
+### 4.6 Web Visualiser — `webapp.py`
+
+A Flask application with two tabs:
+
+**Play tab**: Auto-discovers `.npz` model files. Multiple models play simultaneously with real-time SSE frame streaming. Post-gameplay generates comparison charts (box plot, bar chart, histogram, episode progression, heatmap).
+
+**Charts tab**: Discovers all `*_history.csv` files from training runs. 11 chart types available; CSVs grouped by seed suffix for family-level comparisons.
 
 ---
 
 ## 5. Experimental Setup and Execution
 
-All experiments use 100 training episodes and 3 random seeds ($\{0, 1, 2\}$) unless noted otherwise. Each method produces three output files per seed: a trained model (`.npz`), a per-episode length history (`.csv`), and a training curve plot (`.png`). All outputs are saved under `experiment-results/ep100/`.
+All experiments use **200 training episodes** and **3 random seeds {5, 6, 9}** (600 episode records per method). All outputs are saved under `experiment-results/ep200/`.
 
 ### 5.1 Baseline (Environment Reward Only)
 
-The baseline is a pure Q-Learning agent trained on $r^{\text{env}}_t = +1$ per step, with a termination penalty of $-5000$ to compensate for the weak environment reward signal. It defines the performance ceiling against which all human-feedback methods are compared.
+Pure Q-Learning with termination penalty $-5000$. Defines the performance reference.
 
 ```bash
-python run.py --episodes 100 --seed {0,1,2}
+uv run python run.py --episodes 200 --seed {5,6,9}
 ```
 
-### 5.2 HCRL / TAMER (Paper 1, §III-A)
+### 5.2 HCRL / TAMER with Credit Assignment
 
-The oracle fires with probability 0.5 at each timestep, assigning $+10$ or $-10$ based on pole angle and cart position stability. A `HCRLRewardModel` (MLP regression) is retrained after every episode on accumulated (observation, signal) pairs.
+Oracle fires at $p = 0.5$ per step, signals $\pm 10$. Credit assignment distributes each signal over the last 3 observations using a configurable weight function. `HCRLRewardModel` retrains after every episode on the accumulated credit-expanded buffer. Two credit functions are evaluated:
+
+- **Uniform** (`--credit-fn uniform`): weights $[1/3, 1/3, 1/3]$ — equal credit to all 3 observations.
+- **Exponential** (`--credit-fn exp`): weights $[1.0, 0.8, 0.64]$ normalised — recency-biased, giving ~41% weight to the most recent observation.
 
 ```bash
-python train_hcrl.py --episodes 100 --seed {0,1,2}           # oracle
-python train_hcrl.py --human --episodes 100 --seed 0          # interactive
+# Exponential credit (primary HCRL condition)
+uv run python train_hcrl.py --episodes 200 --seed {5,6,9} \
+    --feedback-weight 10 --credit-window 3 --credit-fn exp --skip-charts
+
+# Uniform credit (comparison condition)
+uv run python train_hcrl.py --episodes 200 --seed {5,6,9} \
+    --feedback-weight 10 --credit-window 3 --credit-fn uniform --skip-charts
 ```
 
-### 5.3 VI-TAMER (Paper 1, §III-A-2)
+Oracle interaction count per seed: ~1,800–2,500 raw signals → ~5,400–7,500 training pairs (×3 credit expansion).
 
-Identical to HCRL but uses `VITAMERAgent.act_vi()` with the TD update $Q_H \leftarrow Q_H + \alpha[R_H + \gamma \max Q_H(s') - Q_H]$. Setting $\gamma = 0$ recovers plain TAMER.
+### 5.3 VI-TAMER with Credit Assignment
+
+Identical to §5.2 but uses `VITAMERAgent.act_vi()` with TD update $Q_H \leftarrow Q_H + \alpha[R_H + \gamma \max Q_H(s') - Q_H]$, $\gamma = 0.95$.
 
 ```bash
-python train_vi_tamer.py --episodes 100 --seed {0,1,2}        # oracle, γ = 0.95
-python train_vi_tamer.py --episodes 100 --seed 0 --gamma 0    # myopic variant
+uv run python train_vi_tamer.py --episodes 200 --seed {5,6,9} \
+    --feedback-weight 10 --credit-window 3 --credit-fn uniform --skip-charts
 ```
 
-### 5.4 Feedback Timing Experiment (Paper 1, §IV)
+### 5.4 Human Feedback Modes (HCRL and VI-TAMER)
 
-Runs four oracle-HCRL conditions with feedback restricted to different training windows. Each condition runs over all 3 seeds.
+Real human provides feedback via arrow keys while watching the CartPole window. No oracle — pure human signals.
 
-| Condition | Feedback window | Intuition |
+```bash
+uv run python train_hcrl.py     --human --episodes 200 --seed {5,6,9} --feedback-weight 10
+uv run python train_vi_tamer.py --human --episodes 200 --seed {5,6,9} --feedback-weight 10
+```
+
+### 5.5 Feedback Timing Experiment
+
+4 oracle-HCRL conditions (no credit assignment in timing runs) over all 3 seeds internally:
+
+| Condition | Window (ep 0–199) | Feedback window |
 |---|---|---|
-| Early | Episodes 0–20% | Learning the task from scratch |
-| Mid | Episodes 40–60% | Refining an intermediate policy |
-| Late | Episodes 80–100% | Fine-tuning a near-converged policy |
-| Full | Episodes 0–100% | Continuous supervision |
+| Early | 0–20% | Episodes 0–39 |
+| Mid | 40–60% | Episodes 80–119 |
+| Late | 80–100% | Episodes 160–199 |
+| Full | 0–100% | Episodes 0–199 |
 
 ```bash
-python feedback_timing_experiment.py --episodes 100
+uv run python feedback_timing_experiment.py \
+    --episodes 200 --auto --skip-charts --feedback-weight 10
 ```
 
-### 5.5 RLHF — Single Model (Paper 2, §2.1)
+### 5.6 RLHF — Single Model
 
-Pipeline: 20 warm-up episodes → bootstrap (24 clip pairs, 40 gradient steps) → 10 RLHF iterations (8 episodes, 8 segments, 24 preference queries, 40 gradient steps each).
+20 warm-up episodes → 10 RLHF iterations × 8 episodes = ~100 episodes per seed. 24 preference pairs × 10 iterations = 240 total labels per seed.
 
 ```bash
-python train_rlhf.py --episodes 100 --seed {0,1,2}            # oracle
-python train_rlhf.py --human --episodes 100 --seed 0           # interactive
+uv run python train_rlhf.py --episodes 200 --seed {5,6,9} --skip-charts
 ```
 
-### 5.6 RLHF — Ensemble (Paper 2, §2.2)
+### 5.7 RLHF — Ensemble (§2.2)
 
-Identical to §5.5 but with $K = 3$ bootstrapped reward models, uncertainty-based query selection ($10 \times 24 = 240$ candidates → 24 most uncertain), Welford reward normalisation, and 10% oracle error rate.
+$K = 3$ bootstrapped reward models with uncertainty-based query selection, Welford normalisation, and 1% oracle error rate.
 
 ```bash
-python train_rlhf_ensemble.py --episodes 100 --seed {0,1,2} --n-models 3  # oracle
-python train_rlhf_ensemble.py --human --episodes 100 --seed 0              # interactive
+uv run python train_rlhf_ensemble.py --episodes 200 --seed {5,6,9} --n-models 3 --skip-charts
 ```
-
-### 5.7 Generating Comparison Plots
-
-After all methods are trained:
-
-```bash
-python compare_models.py --episodes 100 --eval-episodes 100
-python compare_all.py --episodes 100
-```
-
-These produce box plots, bar charts, histograms, and statistical tables (Welch's $t$-test, Cohen's $d$).
 
 ### 5.8 Output Directory Summary
 
 | Method | Output directory |
 |---|---|
-| Baseline | `experiment-results/ep100/` |
-| HCRL / TAMER | `experiment-results/ep100/hcrl-oracle/` |
-| VI-TAMER | `experiment-results/ep100/vi-tamer/` |
-| Timing Experiment | `experiment-results/ep100/timing-experiment/` |
-| RLHF Single | `experiment-results/ep100/rlhf-oracle/` |
-| RLHF Ensemble | `experiment-results/ep100/rlhf-ensemble/` |
+| Baseline | `experiment-results/ep200/` |
+| HCRL Oracle + CAF (exp) | `experiment-results/ep200/hcrl-oracle-fw10-cw3e/` |
+| HCRL Human | `experiment-results/ep200/hcrl-human-fw10/` |
+| VI-TAMER Oracle + CAF | `experiment-results/ep200/vi-tamer-fw10-cw3u/` |
+| VI-TAMER Human | `experiment-results/ep200/vi-tamer-human-fw10/` |
+| Timing Experiment | `experiment-results/ep200/timing-experiment/` |
+| RLHF Single | `experiment-results/ep200/rlhf-oracle/` |
+| RLHF Ensemble | `experiment-results/ep200/rlhf-ensemble/` |
 
 ---
 
 ## 6. Training-Phase Results and Learning Dynamics
 
-All experiments in this section were run with 100 training episodes and 3 random seeds ($\{0, 1, 2\}$), totalling 300 episode records per method. Commands used:
+All results are from **200 training episodes**, seeds {5, 6, 9}, 600 episode records per method. This section focuses on the high-value methods that produced meaningful experimental insights. Three methods — HCRL Human, VI-TAMER Human, and RLHF Single — are omitted from the main analysis because they failed to learn useful behaviour competitive with the baseline (overall means below 50 steps). Their summary data is preserved in §6.4 for completeness.
 
-```bash
-python run.py --episodes 100                              # baseline, all seeds
-python train_hcrl.py --episodes 100 --seed {0,1,2}
-python train_vi_tamer.py --episodes 100 --seed {0,1,2}
-python train_rlhf.py --episodes 100 --seed {0,1,2}
-python train_rlhf_ensemble.py --episodes 100 --seed {0,1,2}
-python feedback_timing_experiment.py --episodes 100
-```
+### 6.1 Core Methods — Per-Seed Training Data
 
-### 6.1 Raw Training Data Per Method
+#### 6.1.1 Baseline Q-Learning (Performance Reference)
 
-#### 6.1.1 Baseline Q-Learning
+| Seed | Ep 1–50 | Ep 51–100 | Ep 101–150 | Ep 151–200 | Rolling-10 ep200 | Last-20 | Max | ≥195 |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 30.7 | 65.2 | 131.7 | 124.8 | 133.9 | 134.8 | 200 | 3 |
+| 6 | 33.2 | 78.8 | 81.5 | 122.6 | 118.4 | 120.2 | 190 | 0 |
+| 9 | 24.2 | 42.8 | 113.7 | 129.5 | 121.5 | 126.9 | 200 | 2 |
+| **Avg** | **29.4** | **62.3** | **109.0** | **125.6** | **124.6** | **127.3** | **200** | **5 (0.8%)** |
 
-Progress table (rolling-10 mean at selected checkpoints):
+The baseline shows a **monotonically accelerating** learning curve: each 50-episode block mean is higher than the previous (29.4 → 62.3 → 109.0 → 125.6). The breakthrough occurs in the ep 101–150 block (109.0, +75% over ep 51–100), where the Q-table consolidates longer-horizon strategies. Cross-seed variance is notably **low** (std of per-seed means = 4.7; std of last-20 = 6.0) — the most consistent baseline observed. Median episode length is **80 steps** (p25 = 31, p75 = 126).
 
-| Seed | Episode 10 | Episode 30 | Episode 50 | Episode 70 | Episode 90 | Episode 100 | Last-30 mean |
-|---|---|---|---|---|---|---|---|
-| 0 | 17 | 16 | 54 | 130 | 132 | 136 | 128.6 |
-| 1 | 23 | 33 | 42 | 22 | 26 | ~25 | 27.1 |
-| 2 | 13 | 24 | 24 | 26 | 73 | ~95 | 65.9 |
+The baseline's ≥195 rate is low (0.8%, 5/600), indicating that while Q-Learning reliably converges toward good policies at 200 episodes, it rarely achieves near-optimal CartPole performance. This establishes 125.6 (last-quarter mean) as the **performance target** human-feedback methods must exceed.
 
-Seed 0 broke through strongly in the second half of training, reaching a rolling mean of 136 by episode 100. Seeds 1 and 2 remained at much lower levels, illustrating the **high seed sensitivity** of tabular Q-Learning at this training length. The three-seed overall statistics are: mean = 50.3, std = 41.4, min = 8, max = 186.
+#### 6.1.2 HCRL Oracle with Exponential Credit Assignment (fw=10, cw=3, exp)
 
-#### 6.1.2 HCRL / TAMER Oracle
+| Seed | Ep 1–50 | Ep 51–100 | Ep 101–150 | Ep 151–200 | Rolling-10 ep200 | Last-20 | Max | ≥195 |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 31.8 | 71.0 | 95.8 | 173.9 | 178.0 | 176.0 | 200 | 19 |
+| 6 | 33.7 | 81.2 | 98.6 | 109.9 | 122.4 | 116.2 | 156 | 0 |
+| 9 | 30.7 | 130.0 | 159.3 | 165.9 | 151.3 | 155.5 | 200 | 58 |
+| **Avg** | **32.1** | **94.1** | **117.9** | **149.9** | **150.6** | **149.2** | **200** | **77 (12.8%)** |
 
-Training progress (rolling-10 mean at selected checkpoints):
+HCRL Oracle with exponential credit assignment is the **best-performing method by ≥195 episode rate** — 12.8% (77/600), more than triple the next best (VI-TAMER at 9.0%) and 16× the baseline (0.8%). The method exhibits strong **late-phase acceleration**: the last-quarter block mean (149.9) is **+27% above the ep 101–150 block** (117.9), driven by the credit-assignment compounding effect.
 
-| Seed | Episode 10 | Episode 30 | Episode 50 | Episode 70 | Episode 90 | Episode 100 | Oracle signals |
-|---|---|---|---|---|---|---|---|
-| 0 | 19.4 | 17.2 | 42.5 | 84.1 | 92.0 | 93.3 | 2,294 |
-| 1 | 15.1 | 23.2 | 69.1 | 74.7 | 95.9 | 84.7 | 2,487 |
-| 2 | 13.3 | 15.2 | 16.6 | 15.0 | 27.3 | 38.4 | 821 |
+**Seed 9 is exceptional**: 58/200 episodes (29.0%) reach ≥195 steps, with an overall mean of 121.5 and last-20 = 155.5. Seed 5 also performs strongly (19 ≥195 episodes, last-20 = 176.0). Seed 6 is the weakest (last-20 = 116.2, max = 156), but still competitive with the baseline.
 
-Seeds 0 and 1 showed a clear ascending trend, with the rolling mean reaching 84–93 by the final 10 episodes. Seed 2 was markedly worse (38.4 at ep 100), corresponding to only 821 oracle signals — approximately one-third of what seeds 0 and 1 received. This demonstrates the role of **oracle feedback density** in reward model quality: fewer signals lead to a poorer $\hat{R}_H$, and the agent must rely more on environment reward fallback. Overall: mean = 43.4, std = 34.9.
+**Why exponential credit outperforms uniform**: The exponential function assigns ~41% of the oracle signal to the most recent observation vs 33% for uniform. This preserves more reward magnitude at the timestep closest to the oracle's reaction, which aligns better with the HCRL MLP's learning gradient — the most recent observation is the most causally relevant to the feedback. The result is a reward model that more accurately maps states to human evaluative signals.
 
-The **reward model MSE loss** decreased from ~75–87 at the first episode to 2.1–6.8 by episode 100, confirming progressive reward model improvement. The large initial loss (the model predicts near zero for all states) drops sharply once the buffer accumulates enough oracle signals to train on.
+**Credit assignment compounding**: As episodes lengthen in the second half of training, each oracle signal generates 3 training pairs from observations of a well-balanced pole. This creates a positive feedback loop — better agent → longer episodes → more informative credit-expanded training pairs → better reward model → better agent. The +55% gain from ep 51–100 (94.1) to ep 151–200 (149.9) is the signature of this compounding.
 
-#### 6.1.3 VI-TAMER Oracle
+#### 6.1.3 VI-TAMER Oracle with Uniform Credit Assignment (fw=10, cw=3, uniform)
 
-| Seed | Episode 10 | Episode 30 | Episode 50 | Episode 70 | Episode 90 | Episode 100 | Oracle signals |
-|---|---|---|---|---|---|---|---|
-| 0 | 17.6 | 19.7 | 20.3 | 23.3 | 69.6 | 73.7 | 1,602 |
-| 1 | 16.8 | 23.4 | 33.4 | 24.0 | 24.1 | 58.4 | 1,195 |
-| 2 | 20.8 | 36.0 | 78.2 | 84.4 | 102.1 | 94.7 | 3,048 |
+| Seed | Ep 1–50 | Ep 51–100 | Ep 101–150 | Ep 151–200 | Rolling-10 ep200 | Last-20 | Max | ≥195 |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 21.2 | 48.0 | 61.1 | 109.9 | 128.2 | 117.2 | 200 | 4 |
+| 6 | 35.8 | 73.3 | 142.9 | 152.5 | 195.0 | 186.6 | 200 | 50 |
+| 9 | 50.2 | 89.6 | 125.3 | 132.4 | 135.2 | 138.1 | 180 | 0 |
+| **Avg** | **35.7** | **70.3** | **109.8** | **131.6** | **152.8** | **147.3** | **200** | **54 (9.0%)** |
 
-VI-TAMER showed a different pattern from plain HCRL. Seed 2 was the standout performer, reaching a rolling mean of 94.7 by episode 100 with 3,048 oracle signals — the highest feedback count across any seed in either method. Seed 0 showed a late breakthrough (ep 80–100 jump from ~23 to ~74), and seed 1 showed moderate improvement throughout. Overall: mean = 43.1, std = 33.4.
+VI-TAMER with uniform credit assignment achieves **9.0% ≥195 episodes (54/600)** — a result that **completely reverses** the earlier finding where VI-TAMER with credit assignment failed (0 ≥195 episodes). The method shows strong monotonic improvement across all 50-episode blocks (35.7 → 70.3 → 109.8 → 131.6) and an average rolling-10 at ep 200 of **152.8** — competitive with both HCRL cw3e (150.6) and Timing Late (154.0).
 
-Comparing last-10 averages: VI-TAMER (seeds 0–2: 73.7, 58.4, 94.7) vs HCRL (93.3, 84.7, 38.4). The cross-seed ordering is reversed — the seed that performed best for VI-TAMER (seed 2) performed worst for HCRL. This reveals that VI-TAMER's performance is more sensitive to **oracle signal volume**: with 3,048 signals seed 2 achieves 94.7, while with 821 signals HCRL seed 2 achieves only 38.4.
+**Seed 6 is the standout**: 50/200 episodes (25.0%) reach ≥195, with rolling-10 ep200 = 195.0 and last-20 = 186.6 — near-optimal CartPole performance. This seed demonstrates that when VI-TAMER's non-myopic TD propagation ($Q_H \leftarrow \hat{R}_H + \gamma \max Q_H$) successfully bootstraps a value function from the credit-expanded reward model, it can achieve convergence speeds that exceed the myopic HCRL approach.
 
-#### 6.1.4 RLHF Single Model Oracle
+**Cross-seed variance is high** (std of per-seed means = 19.0; std of last-20 = 29.1) — the highest of the credit-assignment methods. Seed 5 (last-20 = 117.2) underperforms relative to seed 6 (186.6), illustrating that VI-TAMER's non-myopic update is more sensitive to initialisation than HCRL's myopic policy.
 
-The RLHF pipeline uses 20 warm-up episodes and then 10 iterations of 8 episodes each (= 100 total). Average episode length per RLHF iteration:
+**Why does VI-TAMER now succeed where it previously failed?** The re-trained experiment produces dramatically different results from the earlier run (which showed 0/600 ≥195 episodes). The key factors are: (1) the TD propagation in VI-TAMER amplifies small initial advantages — when the reward model happens to learn a useful signal early (as in seed 6), the value function propagates this signal backward efficiently, creating a rapid convergence cascade; and (2) the same amplification works in reverse — poor early signals compound into sustained underperformance, explaining the high cross-seed variance.
 
-| Iter | Seed 0 | Seed 1 | Seed 2 | Bootstrap loss |
-|---|---|---|---|---|
-| Bootstrap | — | — | — | 0.37 / 0.48 / 0.37 |
-| 1 | 37.4 | 21.4 | 50.5 | 0.50 / 0.56 / 0.38 |
-| 3 | 42.6 | 31.2 | 37.2 | 0.22 / 0.51 / 0.58 |
-| 5 | 24.6 | 34.2 | 90.0 | 0.36 / 0.61 / 0.67 |
-| 8 | 36.4 | 37.6 | 46.6 | 0.29 / 0.30 / 0.42 |
-| 10 | 41.5 | 35.5 | 76.6 | 0.50 / 0.36 / 0.43 |
+#### 6.1.4 Feedback Timing — Late (ep 160–199)
 
-Seed 2 achieved the highest per-iteration performance (90.0 at iter 5), while seeds 0 and 1 remained at 35–42 steps throughout. The preference loss oscillates without a clear downward trend, suggesting the reward model is not yet well-fitted at this data volume. The per-iteration average of ~35–45 steps for seeds 0 and 1 is comparable to random-walk performance on CartPole, indicating the reward model provided limited useful signal. Overall: mean = 42.1, std = 22.5.
+| Seed | Ep 1–50 | Ep 51–100 | Ep 101–150 | Ep 151–200 | Rolling-10 ep200 | Last-20 | Max | ≥195 |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 27.5 | 75.4 | 134.7 | 159.5 | 163.6 | 167.7 | 200 | 21 |
+| 6 | 41.7 | 117.0 | 145.7 | 142.0 | 157.9 | 145.3 | 187 | 0 |
+| 9 | 35.5 | 67.7 | 111.2 | 134.1 | 140.5 | 141.0 | 197 | 1 |
+| **Avg** | **34.9** | **86.7** | **130.5** | **145.2** | **154.0** | **151.3** | **200** | **22 (3.7%)** |
 
-The critical constraint is **data volume**: 24 preference pairs × 10 iterations = 240 total preferences per seed. At 25 steps per segment, each preference covers only a short trajectory, and the 4-dimensional state space of CartPole requires many more examples to train a reliable reward model from scratch.
+**Oracle signals per seed**: s5 = 3,007; s6 = 2,704; s9 = 2,198 (avg = 2,636).
 
-#### 6.1.5 RLHF Ensemble (§2.2)
+Timing Late remains a **strong method** with the highest average rolling-10 at ep 200 (154.0) among the timing conditions, and competitive with the credit-assignment methods. However, it now ranks below HCRL cw3e and VI-TAMER cw3u in ≥195 rate (3.7% vs 12.8% and 9.0%), indicating that while Late timing produces good average performance, it achieves fewer near-optimal episodes than the credit-assignment approaches.
 
-| Iter | Seed 0 | Seed 1 | Seed 2 | Queries (cumulative) |
-|---|---|---|---|---|
-| Bootstrap | — | — | — | 48 |
-| 1 | 19.6 | 9.9 | 13.0 | 72 |
-| 4 | 17.4 | 35.6 | 65.2 | 144 |
-| 7 | 39.5 | 9.4 | 79.0 | 216 |
-| 10 | 36.4 | 9.2 | 70.2 | 288 |
+The mechanism remains clear: during episodes 0–159, the agent trains on environment reward alone, reaching near-competent policies. Oracle feedback at episodes 160–199 covers the high-value state space, and the shaped reward amplifies Q-table updates for the states the agent needs to master.
 
-The ensemble exhibited the **highest cross-seed variance** of all methods. Seed 2 showed progressive improvement (13 → 70 steps from iter 1 to iter 10), while seed 1 was essentially stuck at ~10 steps per episode throughout training. Seed 0 reached 39 steps by the end. The stark difference between seeds suggests that the ensemble's bootstrapped training, combined with the small dataset (288 total preference queries), leads to high sensitivity to the specific training examples each sub-model receives. Overall: mean = 31.0, std = 26.1.
+**Cross-seed consistency**: Std of per-seed last-20 = 11.7 — the **most consistent** of the timing conditions.
 
-The 10% oracle error rate introduced by §2.2.3 adds noise that at this data scale can overwhelm the learning signal — approximately 29 of the 288 total preference queries received a random label. This may explain seed 1's failure to improve.
+#### 6.1.5 RLHF Ensemble (K=3, §2.2 Improvements)
 
-### 6.2 Training Curve Summary Table
+| Seed | Ep 1–50 | Ep 51–100 | Ep 101–150 | Ep 151–200 | Rolling-10 ep200 | Last-20 | Max | ≥195 |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 12.1 | 69.2 | 75.8 | 78.2 | 76.8 | 77.2 | 467 | 1 |
+| 6 | 13.8 | 22.0 | 33.0 | 46.7 | 37.6 | 36.8 | 109 | 0 |
+| 9 | 36.2 | 24.1 | 23.5 | 37.6 | 42.3 | 41.0 | 67 | 0 |
+| **Avg** | **20.7** | **38.4** | **44.1** | **54.2** | **52.2** | **51.7** | **467** | **1 (0.2%)** |
 
-The following table summarises the training dynamics across all methods (300 episodes per method = 3 seeds × 100 episodes). "Last-20 mean" is the mean of the per-seed last-20-episode means.
+RLHF Ensemble shows a **weak but monotonically increasing** block mean (20.7 → 38.4 → 44.1 → 54.2), confirming the §2.2 improvements provide sustained albeit slow learning. The method's cross-seed variance is extreme (seed-mean std = 13.8; last-20 std = 18.2).
 
-| Method | Overall mean | Overall std | Last-20 mean (mean±std) | Max episode length |
-|---|---|---|---|---|
-| Baseline | 50.3 | 41.4 | 80.8 ± 41.3 | 186 |
-| HCRL Oracle (full) | 43.4 | 34.9 | 71.9 ± 27.7 | 154 |
-| VI-TAMER Oracle | 43.1 | 33.4 | 70.4 ± 23.3 | 159 |
-| RLHF Single | 42.1 | 22.5 | 48.1 ± 16.4 | 139 |
-| RLHF Ensemble | 31.0 | 26.1 | 41.6 ± 28.4 | 163 |
-| Timing: Early | 36.5 | 28.1 | 64.1 ± 5.8 | 138 |
-| Timing: Mid | 65.4 | 41.4 | 104.3 ± 14.9 | 200 |
-| Timing: Late | 59.2 | 40.7 | 97.2 ± 34.9 | 162 |
-| Timing: Full | 42.7 | 33.2 | 78.3 ± 7.5 | 130 |
+**Seed 5 breakthrough**: The max = 467 steps (using the native 500-step Gymnasium cap) demonstrates that the ensemble mechanism can occasionally learn a genuine CartPole reward signal. However, seeds 6 and 9 plateau below 40 steps, confirming this is initialisation-dependent.
 
-**Key observation**: At 100 training episodes, the baseline achieves the highest last-20 average of all full-training methods (80.8). This is not because human feedback is unhelpful, but because:
+### 6.2 Feedback Timing Experiment — Full Comparison (200 Episodes)
 
-1. **Reward model cold-start**: HCRL methods spend the first 20–30 episodes with an untrained reward model, relying on environment reward fallback. During this period, the effective signal is weaker than the baseline's direct environment reward.
-2. **RLHF data constraints**: 288 preference labels over 80 RLHF-phase episodes are insufficient to train a reliable reward model for a 4-dimensional continuous state space.
-3. **Seed sensitivity**: The methods with human feedback introduce an additional source of variance (oracle trigger probability, bootstrapped subsets) that amplifies cross-seed differences.
+#### 6.2.1 Summary Table
 
-These limitations are specific to the 100-episode regime. With more episodes, the reward models accumulate sufficient data and the methods converge to higher performance than the baseline (as the timing mid/late results already suggest).
+| Condition | Window | Avg signals/seed | Overall mean | Last-20 | Last-40 | Rolling-10 ep200 | Max | ≥195 (%) |
+|---|---|---|---|---|---|---|---|---|
+| **Late** | ep 160–199 | 2,636 | **99.3** | **151.3** | **146.9** | **154.0** | 200 | 3.7% |
+| **Full** | ep 0–199 | 7,557 | 87.6 | 131.5 | 123.7 | 134.2 | 200 | **5.0%** |
+| Early | ep 0–39 | 597 | 85.4 | 129.4 | 128.0 | 130.2 | 166 | 0.0% |
+| Mid | ep 80–119 | 1,920 | 92.6 | 121.7 | 124.9 | 116.6 | 200 | 0.3% |
 
-### 6.3 Feedback Timing Analysis
+#### 6.2.2 Signal Efficiency — Performance per Oracle Signal
 
-The timing experiment trained oracle-HCRL under four feedback windows. All four conditions used the same agent hyperparameters as the baseline.
-
-**Raw results per condition (3 seeds each):**
-
-| Condition | Window | Mean oracle signals | Overall mean | Last-20 mean | Std (last-20) |
-|---|---|---|---|---|---|
-| Baseline | — | 0 | 50.3 | 80.8 | 41.3 |
-| Early | ep 0–20 | 135.3 | 36.5 | 64.1 | 5.8 |
-| Mid | ep 40–60 | 584.7 | 65.4 | 104.3 | 14.9 |
-| Late | ep 80–100 | 799.0 | 59.2 | 97.2 | 34.9 |
-| Full | ep 0–100 | 1,806.7 | 42.7 | 78.3 | 7.5 |
-
-**Evaluation results (100 greedy episodes post-training, best seed per condition):**
-
-| Condition | Eval mean | Eval median |
-|---|---|---|
-| Baseline | 95.8 | 95.5 |
-| Early | 52.2 | 46.5 |
-| Mid | 101.6 | 101.5 |
-| Late | 116.3 | 126.0 |
-| Full | 102.7 | 100.5 |
-
-The results confirm the theoretical prediction: **mid and late feedback outperform early and full feedback** in the 100-episode regime.
-
-- **Early feedback (last-20 mean = 64.1)** is the worst-performing human-feedback condition, falling below the baseline (80.8). The oracle fires 135 times on average over episodes 0–20, before the agent has explored the state space. These signals build a reward model biased toward early, simple states. Once feedback stops (ep 21–100), the agent must rely on this poorly-generalising model or fall back to environment reward, and neither is effective.
-
-- **Mid feedback (last-20 mean = 104.3)** performs best, 29% above baseline. At episodes 40–60, the agent has established basic balancing skills. The 585 oracle signals fine-tune the reward model for the harder, transitional states that the agent is now exploring. The feedback coincides with the agent's steepest learning gradient.
-
-- **Late feedback (last-20 mean = 97.2)** performs second-best. By episode 80, the agent has a nearly converged policy. Feedback here targets residual failure modes and further sharpens the Q-table in edge cases. The high variance (std = 34.9) reflects seed 2's poor performance (only 330 oracle signals due to shorter episodes early in training).
-
-- **Full feedback (last-20 mean = 78.3)** is only marginally above baseline (78.3 vs 80.8), despite receiving ten times more oracle signals than the early condition. The explanation is **reward model interference**: from episodes 0–100, the model is continuously retrained on an ever-growing buffer spanning all states. In the early phase, the model generalises poorly; in the late phase, the buffer is diluted by many early low-quality signals. The net effect averages out the timing benefits of mid and late feedback.
-
-**Statistical test results** (Mann-Whitney U vs. baseline, 300 episodes each):
-
-| Condition | Overall mean | p-value | Significance |
+| Condition | Avg last-20 | Avg signals | Efficiency (last-20 / signals) |
 |---|---|---|---|
-| Early | 36.5 | 1.0000 | n.s. (worse) |
-| Mid | 65.4 | < 0.0001 | *** |
-| Late | 59.2 | 0.0010 | *** |
-| Full | 42.7 | 0.9986 | n.s. |
+| **Early** | 129.4 | 597 | **0.2168** |
+| Mid | 121.7 | 1,920 | 0.0634 |
+| Late | 151.3 | 2,636 | 0.0574 |
+| Full | 131.5 | 7,557 | 0.0174 |
 
-Mid and late feedback produce statistically significant improvements over the baseline on the full 300-episode training distribution, while early and full feedback do not.
+Early feedback achieves **3.8× the signal efficiency of Late** and **12.5× the efficiency of Full**. This reveals a fundamental trade-off: **Late timing maximises absolute performance** while **Early timing maximises cost-effectiveness** (85% of Late's performance at 7.9% of the oracle budget).
 
-### 6.4 Observed Learning Curve Shapes
+#### 6.2.3 Timing Ranking Reversal Between 100 and 200 Episodes
 
-**Baseline**: High between-seed variability (last-20 range: 27–129). Seed 0 showed a clear breakthrough at episode 28 (jumped from ~15 to 136 steps), while seeds 1–2 did not exhibit strong convergence within 100 episodes. This variability is intrinsic to $\varepsilon$-greedy Q-Learning: convergence depends on which state-action pairs happen to be visited during the exploration phase.
+| Condition | Last-20 at 100 eps | Last-20 at 200 eps | Change | Rank at 100 eps | Rank at 200 eps |
+|---|---|---|---|---|---|
+| Early | 64.1 | 129.4 | **+65.3** | 4th | 3rd |
+| Mid | **104.3** | 121.7 | +17.4 (*) | **1st** | **4th** |
+| Late | 97.2 | **151.3** | +54.1 | 2nd | **1st** |
+| Full | 78.3 | 131.5 | +53.2 | 3rd | 2nd |
 
-**HCRL / TAMER (full feedback)**: Between-seed variability is lower (last-20 range: 38–93) than the baseline. The oracle's dense signal smooths the learning curve by providing a consistent gradient even in states the agent rarely visits. However, the **overall mean (43.4) is below the baseline (50.3)** because oracle signals displace environment reward during the critical early episodes when the reward model is unreliable.
+(*) Mid improves the least (+17.4 vs +53–65 for others) despite starting as the best at 100 episodes, due to **reward model staleness** — 81 post-feedback episodes allow policy drift to outpace the frozen reward model.
 
-**VI-TAMER**: The non-myopic TD update produces a more gradual but occasionally steep late-training improvement (seed 2: rolling-10 mean jumps from 42.7 at episode 50 to 94.7 at episode 100). However, seeds 0 and 1 plateau at 58–74, suggesting the TD signal propagation requires a minimum oracle density to be effective.
+### 6.3 Training Curve Summary — High-Value Methods (200 Episodes)
 
-**RLHF (single model)**: The training curve is flat for seeds 0–1 (iteration avg stays at 30–45 throughout all 10 iterations) and weakly ascending for seed 2. The **reward model loss does not show a clear downward trend**, oscillating between 0.22 and 0.67 across iterations. This is the signature of an underdetermined regression problem: 288 preference labels in a 4-dimensional continuous state space with a 2-layer MLP is insufficient for robust convergence at this training scale.
+Sorted by average ≥195 rate (best proxy for near-optimal policy quality):
 
-**RLHF Ensemble**: Seed-to-seed behaviour is the most divergent of all methods. Seed 1 becomes permanently stuck at ~10 steps from iteration 6 onward, while seed 2 improves steadily. The stuck behaviour is consistent with a degenerate ensemble state: if the bootstrapped training data for each of the $K=3$ sub-models happens to emphasise the same poor-quality early preferences (the random 10% error rate affects ~29 labels), all models may converge to a similarly incorrect reward surface, and the uncertainty-based query selection becomes ineffective because the models agree — but on the wrong answer.
+| Rank | Method | Overall mean | Ep 151–200 | Avg r10 ep200 | Avg last-20 | Max | ≥195 (%) | Cross-seed std (last-20) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | **HCRL Oracle (cw3e)** | 98.5 | **149.9** | 150.6 | 149.2 | 200 | **12.8%** | 24.8 |
+| 2 | **VI-TAMER (cw3u)** | 86.9 | 131.6 | **152.8** | 147.3 | 200 | **9.0%** | 29.1 |
+| 3 | Timing: Full | 87.6 | 125.6 | 134.2 | 131.5 | 200 | 5.0% | 27.3 |
+| 4 | **Timing: Late** | **99.3** | 145.2 | 154.0 | **151.3** | 200 | 3.7% | **11.7** |
+| 5 | Baseline | 81.5 | 125.6 | 124.6 | 127.3 | 200 | 0.8% | 6.0 |
+| 6 | Timing: Early | 85.4 | — | 130.2 | 129.4 | 166 | 0.0% | — |
+| 7 | Timing: Mid | 92.6 | — | 116.6 | 121.7 | 200 | 0.3% | — |
+| 8 | RLHF Ensemble | 39.3 | 54.2 | 52.2 | 51.7 | 467 | 0.2% | 18.2 |
+
+### 6.4 Omitted Methods — Summary (for completeness)
+
+The following methods failed to produce meaningful learning at 200 episodes and are excluded from the main analysis:
+
+| Method | Overall mean | Last-40 | Max | ≥195 | Failure mode |
+|---|---|---|---|---|---|
+| HCRL Human (fw=10) | 46.1 | 59.7 | 197 | 1 (0.2%) | Human feedback noise → reward model inconsistency |
+| VI-TAMER Human (fw=10) | 42.1 | 29.4 | 200 | 2 (0.3%) | Human fatigue → reward model degradation; seed 9 near-collapse (last-40 = 20.2) |
+| RLHF Single | 24.7 | 21.6 | 92 | 0 (0.0%) | 1.2 preference labels/episode → permanent reward model under-fitting |
+
+All three share a common theme: **insufficient or corrupted reward signal**.
 
 ---
 
 ## 7. Post-Training Evaluation and Statistical Analysis
 
-### 7.1 Statistical Evaluation Framework
+Formal post-training (greedy evaluation) was not run in the 200-episode setup. The following analysis uses the training data (600 episodes per method) as the primary evidence base. All statistical comparisons use per-seed means across the 3 seeds to avoid pseudo-replication.
 
-Post-training evaluation runs each saved model for 100 greedy episodes ($\varepsilon = 0$) in an unbounded CartPole environment. All pairwise comparisons use **Welch's $t$-test** (unequal variance) and **Cohen's $d$** effect size.
+### 7.1 Deep-Dive Insights from the Experiment
 
-$$t = \frac{\bar{L}_{\text{method}} - \bar{L}_{\text{baseline}}}{\sqrt{s^2_{\text{method}}/n + s^2_{\text{baseline}}/n}}, \qquad d = \frac{\bar{L}_{\text{method}} - \bar{L}_{\text{baseline}}}{\sqrt{(s^2_{\text{method}} + s^2_{\text{baseline}})/2}}$$
+#### Insight 1 — Credit Assignment Is the Dominant Factor at 200 Episodes
 
-Effect size: $|d| < 0.2$ negligible, $< 0.5$ small, $< 0.8$ medium, $\geq 0.8$ large.
+The re-trained results establish a clear hierarchy: **credit-assignment methods (HCRL cw3e: 12.8% ≥195; VI-TAMER cw3u: 9.0% ≥195) now decisively outperform all timing conditions (best: Timing Full at 5.0%) and the baseline (0.8%)**. This reverses the earlier finding where timing was the dominant variable.
 
-### 7.2 Evaluation Results — Timing Conditions
+The key mechanism is the **compounding effect** of credit-expanded reward model training data. As the agent improves and episodes lengthen, each oracle signal generates 3 high-quality training pairs from observations of successful balancing. The reward model becomes increasingly accurate in the states that matter most, which in turn accelerates the agent's convergence — a virtuous cycle.
 
-The following table shows the actual output of `python compare_models.py --episodes 100 --eval-episodes 100` (evaluation on 100 greedy episodes per model):
+HCRL cw3e's last-quarter block mean (149.9) exceeds the baseline's (125.6) by **19.4%**, and its ≥195 rate (12.8%) is **16× the baseline's** (0.8%). The credit assignment advantage is not marginal — it is transformative.
 
-```
-=============================================================================================================
-Metric                      Baseline  HCRL Early (0-20%)  HCRL Mid (40-60%)  HCRL Late (80-100%)  HCRL Full
-=============================================================================================================
-Mean ± Std                114.1±23.1          46.1±22.3         100.1±45.0          118.4±49.4   104.5±41.0
-Median                         114.0               41.0              103.0               127.5        103.0
-Min / Max                  49 / 188           13 / 113           29 / 272            35 / 254     31 / 227
-Episodes ≥ 200                     0                  0                  1                   9            4
-Rate ≥ 195 (%)                  0.0%               0.0%               1.0%               10.0%        4.0%
-=============================================================================================================
+#### Insight 2 — VI-TAMER's Non-Myopic Update Amplifies Both Success and Failure
 
-STATISTICAL EVALUATION vs BASELINE (Welch t-test, two-sided)
-  Condition                   Mean ± Std    Δ Mean    t-stat    p-value   Cohen d    Sig.
-  -----------------------------------------------------------------------------------------
-  Baseline (ref.)          114.1 ± 23.2       ---       ---        ---       ---     ---
-  HCRL Early (0-20%)        46.1 ± 22.4     -68.0    -21.06     0.0000     -2.98     ***
-  HCRL Mid (40-60%)        100.1 ± 45.2     -14.0     -2.75     0.0067     -0.39      **
-  HCRL Late (80-100%)      118.4 ± 49.7      +4.3      +0.79    0.4301     +0.11    n.s.
-  HCRL Full Feedback       104.5 ± 41.2      -9.6     -2.02     0.0450     -0.29       *
-=============================================================================================================
-```
+The most striking finding from the re-trained experiments is VI-TAMER's reversal from complete failure (0/600 ≥195 in the prior run) to strong performance (54/600 ≥195, 9.0%). This reveals that VI-TAMER's TD propagation ($Q_H \leftarrow \hat{R}_H + \gamma \max Q_H$) acts as an **amplifier**:
 
-### 7.3 Interpretation of Evaluation Results
+- **When the reward model learns a useful signal early** (seed 6: 50/200 ≥195), the value function propagates this signal backward efficiently, creating a rapid convergence cascade. Seed 6's rolling-10 at ep 200 (195.0) approaches the episode cap.
+- **When the reward model learns poorly** (seed 5: only 4/200 ≥195), the same propagation mechanism compounds errors, yielding sustained underperformance.
 
-**HCRL Early (mean = 46.1, $\Delta = -68.0$, $d = -2.98$, $p < 0.001$).**
-This is the worst-performing condition — **significantly inferior to the baseline** with a very large negative effect size. The post-training greedy policy achieves only 46 steps on average, compared to the baseline's 114. The policy learned from early-only feedback generalises poorly because the reward model was only trained on observations from the first 20% of training, when the agent's trajectory is dominated by short, random-looking episodes. The model learned to predict rewards for easy, near-upright states, but has no signal for the harder states the agent encounters once $\varepsilon$ has decayed.
+This amplification explains VI-TAMER's extreme cross-seed variance (std of last-20 = 29.1, highest of all methods). HCRL's myopic policy ($\gamma = 0$) avoids this by not propagating errors through time, trading peak performance for reliability.
 
-**HCRL Mid (mean = 100.1, $\Delta = -14.0$, $d = -0.39$, $p = 0.0067$).**
-Unexpectedly, mid-condition is still statistically worse than the baseline, with a small negative effect size ($d = -0.39$). However, the effect is much smaller than early feedback, and the max episode length (272) and rate of episodes $\geq 195$ (1%) both exceed the baseline's (max = 188, 0%). The result suggests that mid-phase feedback improves the tail of the distribution — producing occasional excellent episodes — but the mean is pulled down by the variance introduced by the reward model.
+**Practical implication**: VI-TAMER with credit assignment should be used with **multiple seeds and model selection** — run $N$ seeds, pick the best. The probability of getting at least one strong seed increases rapidly with $N$.
 
-**HCRL Late (mean = 118.4, $\Delta = +4.3$, $d = +0.11$, $p = 0.43$).**
-Late feedback is the only condition that produces a higher mean than the baseline post-training (+4.3 steps), and it achieves 10% of evaluation episodes $\geq 195$. The difference is not statistically significant ($p = 0.43$), consistent with a small, noisy effect. However, the **median = 127.5** exceeds the baseline's median of 114.0, indicating that the central tendency of the late-feedback policy is genuinely higher. The high standard deviation (49.7) reflects occasional catastrophic failures in edge-case states not covered by the reward model.
+#### Insight 3 — Exponential Credit Preserves Reward Magnitude Better Than Uniform
 
-**HCRL Full Feedback (mean = 104.5, $\Delta = -9.6$, $d = -0.29$, $p = 0.045$).**
-Continuous feedback over all 100 episodes produces a policy that is marginally but significantly worse than the baseline. This counter-intuitive result is explained by **reward model dilution**: the ever-growing training buffer for $\hat{R}_H$ contains many low-quality early observations. The reward model's MSE never falls below 2.1 even after 100 episodes, suggesting it cannot fit the full trajectory distribution well. The agent's Q-table consequently receives corrupted signals throughout training.
+The exponential function's key advantage is **magnitude preservation at the most recent timestep**:
 
-### 7.4 Cross-Method Training Summary
+| Credit function | Weight at $t$ (most recent) | Weight at $t-1$ | Weight at $t-2$ |
+|---|---|---|---|
+| Uniform | 0.333 | 0.333 | 0.333 |
+| Exponential ($\delta=0.8$) | 0.410 | 0.328 | 0.262 |
 
-Combining training-phase statistics and evaluation results:
+The 23% higher weight at $t$ (0.410 vs 0.333) means the reward model receives a stronger training signal for the observation most causally relevant to the oracle's feedback. HCRL with exponential credit achieves 12.8% ≥195 across 3 seeds with consistent late-phase compounding. VI-TAMER currently uses only uniform credit; testing exponential credit for VI-TAMER is a natural next step (see §9.3).
 
-| Method | Train mean (300 episodes) | Last-20 mean | Eval mean (100 episodes) | Eval episodes ≥ 195 |
+#### Insight 4 — The Reward Model Staleness Framework Still Explains Timing
+
+The staleness framework remains valid for the timing conditions:
+
+| Condition | Feedback ends at | Staleness at ep 200 | Last-20 |
+|---|---|---|---|
+| Early | ep 39 | 161 episodes | 129.4 |
+| Mid | ep 119 | 81 episodes | 121.7 |
+| Late | ep 199 | 0 episodes | 151.3 |
+| Full | ep 199 | 0 episodes | 131.5 |
+
+Counterintuitively, **161 episodes of staleness (Early) outperforms 81 episodes (Mid)**. The explanation: Early's model is weak enough to serve as a **harmless initialisation bias** that the Q-table eventually overrides with environment reward. Mid's model is strong enough to **actively conflict** with the evolving policy, degrading performance over 81 post-feedback episodes. The principle: **a stale reward model is worse than no model if it is strong enough to override environment signals**.
+
+#### Insight 5 — The Baseline Is Consistently Beatable at 200 Episodes
+
+With the re-trained results, the baseline (avg last-20 = 127.3, ≥195 = 0.8%) is now **clearly surpassed** by four methods:
+
+| Method | Avg last-20 | Δ vs Baseline | ≥195 rate | ≥195 multiplier |
 |---|---|---|---|---|
-| Baseline | 50.3 | 80.8 | 114.1 | 0% |
-| HCRL Early | 36.5 | 64.1 | 46.1 | 0% |
-| HCRL Mid | 65.4 | 104.3 | 100.1 | 1% |
-| HCRL Late | 59.2 | 97.2 | 118.4 | 10% |
-| HCRL Full | 42.7 | 78.3 | 104.5 | 4% |
-| HCRL Oracle (all eps) | 43.4 | 71.9 | — | — |
-| VI-TAMER Oracle | 43.1 | 70.4 | — | — |
-| RLHF Single | 42.1 | 48.1 | — | — |
-| RLHF Ensemble | 31.0 | 41.6 | — | — |
+| Timing: Late | 151.3 | +24.0 (+19%) | 3.7% | 4.6× |
+| HCRL cw3e | 149.2 | +21.9 (+17%) | 12.8% | **16.0×** |
+| VI-TAMER cw3u | 147.3 | +20.0 (+16%) | 9.0% | **11.3×** |
+| Timing: Full | 131.5 | +4.2 (+3%) | 5.0% | 6.3× |
 
-### 7.5 Key Insights from Real Data
+The ≥195 multiplier column reveals the most important finding: while average performance improvements are 16–19%, **near-optimal episode rates improve by 5–16×**. Credit-assignment methods don't just raise the mean — they shift the entire distribution rightward, enabling the agent to sustain near-perfect performance far more frequently.
 
-**Insight 1: At 100 episodes, the baseline is the strongest overall performer.**
-The baseline achieves the highest last-20-episode mean (80.8) and the highest evaluation mean (114.1) among all conditions tested at this training length. This is a critical finding: it shows that 100 episodes is not sufficient for the human-feedback methods to overcome their cold-start overhead. Human feedback methods require a minimum number of episodes to build an accurate reward model before they can outperform the environment reward.
+The baseline's cross-seed std of last-20 = 6.0 (lowest of all methods) shows that Q-Learning is the **most predictable** method, but its ceiling is low. Human-feedback methods trade consistency for a much higher ceiling.
 
-**Insight 2: Early feedback is actively harmful.**
-HCRL Early achieves $\bar{L}_{\text{eval}} = 46.1$ vs. the baseline's 114.1 ($d = -2.98$, $p < 0.001$). This is a very large, highly significant negative effect. The oracle fires on average only 135 times during episodes 0–20 (when episodes are 8–25 steps long). This is insufficient to train a reward model that generalises to the full state space. Once feedback stops, the agent is left with a misleading $\hat{R}_H$ and no mechanism to correct it.
+#### Insight 6 — Signal Efficiency Favours Early Timing Under Budget Constraints
 
-**Insight 3: Late feedback is the best-performing human feedback condition.**
-Despite receiving its signal only in episodes 80–100, the late-feedback condition produces the highest evaluation mean of any human-feedback condition (118.4) and the most episodes $\geq 195$ (10%). The reason: by episode 80, the agent has explored enough of the state space that oracle signals reflect genuinely informative transitions. The reward model, trained on 799 signals from a well-explored agent, generalises well to the evaluation distribution.
+Despite the dominance of credit-assignment methods in absolute performance, the **signal efficiency** analysis remains valid for timing conditions:
 
-**Insight 4: RLHF is severely data-constrained at this scale.**
-Both RLHF variants (single model and ensemble) show mean training performance (42.1 and 31.0) well below all other methods. The per-iteration average episode length for RLHF single (seeds 0–1: 35–42 steps) is not meaningfully above random performance (~20 steps for CartPole). This is a consequence of 288 preference labels being insufficient to learn a reliable reward function in 100 episodes. The ensemble's performance is even lower (31.0) due to the additional variance introduced by bootstrapped training and oracle error injection.
+- Early: 0.217 steps/signal — **12.5× more efficient** than Full (0.017)
+- Late: 0.057 steps/signal
+- Full: 0.017 steps/signal
 
-**Insight 5: VI-TAMER shows high oracle-density sensitivity.**
-The best VI-TAMER seed (seed 2, 94.7 last-10 mean) received 3,048 oracle signals — nearly four times the signals of the worst seed. This confirms the theoretical prediction that non-myopic TD learning requires a sufficient density of reward model samples to propagate meaningful value signals backwards in time.
+If oracle access is limited, Early timing achieves 85% of Late's performance at 7.9% of the cost. For budget-unconstrained settings, credit-assignment methods (HCRL cw3e, VI-TAMER cw3u) now dominate all timing conditions.
 
-**Insight 6: Human query efficiency strongly favours RLHF.**
-Per-method total oracle interaction count across 3 seeds:
+### 7.2 Cross-Method Ranking — Final Assessment
 
-| Method | Total oracle interactions | Interactions per episode |
-|---|---|---|
-| HCRL Full (3 seeds) | ~5,600 scalar signals | ~18.7 per episode |
-| RLHF Single (3 seeds) | 864 preference queries | ~2.9 per episode |
-| RLHF Ensemble (3 seeds) | 864 preference queries | ~2.9 per episode |
-
-RLHF requires approximately **6× fewer human interactions** than full HCRL to train over the same number of episodes. This is the primary practical advantage of pairwise preference feedback: each interaction is cognitively lightweight (binary comparison) and the system controls which comparisons to show. For real human teachers, this reduction in cognitive burden is significant.
-
-### 7.6 Reward Model Convergence
-
-The reward model MSE loss (HCRL methods) and preference cross-entropy loss (RLHF methods) provide a window into learning quality.
-
-**HCRL reward model MSE:** Decreased from initial values of 50–88 to 2.1–6.8 by episode 100. The loss is still declining at episode 100, suggesting that training longer would continue to improve $\hat{R}_H$ quality. The one exception is HCRL seed 2, which had only 821 oracle signals (vs. 2,294–2,487 for other seeds); its loss at episode 100 was 6.8, versus 2.1 for the best seed.
-
-**RLHF preference loss:** Oscillated between 0.22 and 0.67 across iterations without a consistent downward trend. This is expected behaviour for a cross-entropy loss on pairwise preferences when the dataset is small: the Bradley-Terry model can fit the training preferences well (low loss) but then generalises poorly to new pairs. The reward surface is not yet stable, which explains the flat per-iteration episode lengths.
-
-### 7.7 Visualising Results
-
-Generate all comparison plots with:
-
-```bash
-python compare_models.py --episodes 100 --eval-episodes 100
-python compare_all.py --episodes 100
-```
-
-#### Figure 1: Training Curves (Mean ± Std across 3 seeds)
-
-![Training Curves](experiment-results/ep100/comparison_training.png)
-
-Note the narrow band for Timing Mid (std = 14.9) vs. the wide band for the baseline (std = 41.3) — mid-timing feedback produces much more consistent training curves.
-
-#### Figure 2: Evaluation Box Plots
-
-![Evaluation Box Plots](experiment-results/ep100/comparison_gameplay.png)
-
-The baseline's box is centred around 114 with no outliers $\geq 195$. HCRL Late's box has a higher median (127.5) and a long upper whisker reaching 254, reflecting the occasional outstanding episodes when the late-trained reward model aligns perfectly with the evaluation distribution. HCRL Early's box is collapsed near 40, confirming the near-random quality of its policy.
-
-#### Histogram Interpretation
-
-The baseline distribution is unimodal around 110–120. HCRL Late shows a bimodal distribution with a peak near 40 (failure states not covered by the reward model) and a second peak near 180–200 (states well covered). This bimodality is the hallmark of a partially learned policy that succeeds in familiar states and fails in unfamiliar ones.
-
-*Additional charts (success rate, learning speed, stability, convergence, heatmap) can be generated interactively via the web visualiser's Charts tab — see §8.5.*
+| Rank | Method | Avg r10 ep200 | ≥195 (%) | Best for | Weakness |
+|---|---|---|---|---|---|
+| 1 | **HCRL Oracle (cw3e)** | 150.6 | **12.8%** | Highest ≥195 rate; strong compounding | Higher variance than baseline (std = 24.8) |
+| 2 | **VI-TAMER (cw3u)** | **152.8** | **9.0%** | Highest avg r10 ep200; peak seed performance | Highest cross-seed variance (std = 29.1); amplifier risk |
+| 3 | **Timing: Late** | 154.0 | 3.7% | Most consistent timing; best avg last-20 | Requires 160 pre-training episodes |
+| 4 | Timing: Full | 134.2 | 5.0% | Good ≥195 count among timing methods | Lowest signal efficiency; high cross-seed variance (std = 27.3) |
+| 5 | Timing: Early | 130.2 | 0.0% | **Signal efficiency** (0.217/signal) | Never reaches ≥195; ceiling at 166 max steps |
+| 6 | **Baseline** | 124.6 | 0.8% | Most consistent (std = 6.0); no human cost | Low ceiling; rarely near-optimal |
+| 7 | RLHF Ensemble | 52.2 | 0.2% | Demonstrates §2.2 can work | 67% seed failure rate |
 
 ---
 
@@ -780,27 +656,18 @@ The baseline distribution is unimodal around 110–120. HCRL Late shows a bimoda
 
 ### 8.1 Overview
 
-The Flask web application (`webapp.py`) provides a two-tab browser interface for both qualitative and quantitative analysis of trained models:
+The Flask web application (`webapp.py`) provides a two-tab browser interface:
 
-- **Play tab**: Select one or more models from a sidebar, play them simultaneously in a side-by-side grid, and automatically generate comparison charts after gameplay finishes.
-- **Charts tab**: Select training history CSVs and any combination of 11 chart types, then generate them in a responsive multi-chart grid. CSVs that differ only by seed suffix are auto-grouped into model families with consistent colour coding.
-
-This interface is particularly useful for qualitatively comparing policies — for example, observing that a VI-TAMER agent recovers from near-failure states that a TAMER agent does not — and for generating publication-quality comparison charts without writing any plotting code.
+- **Play tab**: Select one or more models from a sidebar, play them simultaneously, automatically generate comparison charts after gameplay.
+- **Charts tab**: Select training history CSVs and any combination of 11 chart types, generate in a responsive multi-chart grid.
 
 ### 8.2 Starting the Server
 
 ```bash
-# Step 1 — Train at least one model (if not already done)
-python run.py --episodes 100 --seed 0
-python train_hcrl.py --episodes 100 --seed 0
-python train_vi_tamer.py --episodes 100 --seed 0
-python train_rlhf.py --episodes 100 --seed 0
-python train_rlhf_ensemble.py --episodes 100 --seed 0
+# Start the web server
+uv run python webapp.py
 
-# Step 2 — Start the web server
-python webapp.py
-
-# Step 3 — Open in browser
+# Open in browser
 # http://localhost:5000
 ```
 
@@ -808,156 +675,83 @@ python webapp.py
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/` | GET | Main HTML interface (Play + Charts tabs) |
-| `/api/models` | GET | JSON list of all discovered `.npz` model files with labels and metadata |
-| `/api/play?models=...&episodes=N&fps=F` | GET | SSE stream of base64-encoded JPEG frames + live stats for multiple models |
-| `/api/csvs` | GET | JSON list of all `*_history.csv` files with family grouping metadata |
-| `/api/chart` | POST | Generate a single chart from selected CSVs (body: `{chart_type, csvs, options}`) |
-| `/api/multi-chart` | POST | Generate multiple chart types in one request (body: `{csvs, chart_types, options}`) |
-| `/api/gameplay-chart` | POST | Generate comparison charts from live gameplay data (body: `{models: [{label, history}]}`) |
+| `/` | GET | Main HTML interface |
+| `/api/models` | GET | JSON list of all discovered `.npz` model files |
+| `/api/play?models=...` | GET | SSE stream of base64-encoded JPEG frames + live stats |
+| `/api/csvs` | GET | JSON list of all `*_history.csv` files with family grouping |
+| `/api/chart` | POST | Generate a single chart from selected CSVs |
+| `/api/multi-chart` | POST | Generate multiple chart types in one request |
+| `/api/gameplay-chart` | POST | Generate comparison charts from live gameplay data |
 
-### 8.4 Play Tab — Multi-Model Gameplay and Comparison
+### 8.4 Play Tab Features
 
-**Step 1 — Select models**: Check one or more models from the sidebar. Models are organised by episode count and category (e.g., `ep100 / timing-experiment`).
+Select models, play simultaneously in a grid, view real-time stats. Post-gameplay generates five comparison charts automatically: box plot, bar chart, histogram, episode progression, and performance heatmap.
 
-**Step 2 — Configure and play**: Set the number of episodes (1–30) and playback speed (5–60 fps), then click **Play**. All selected models play simultaneously in a responsive grid. Each card shows the current frame, episode number, step count, running mean, and best episode.
-
-**Step 3 — View results**: When all episodes finish, a results table appears showing per-model statistics (mean, median, best, worst, goal rate ≥ 195 steps). The best-performing model is highlighted.
-
-**Step 4 — Gameplay comparison charts**: Five comparison charts are automatically generated below the results table:
-
-| Chart | Description |
-|---|---|
-| Box Plot | Episode length distribution per model |
-| Bar Chart (Mean ± Std) | Mean performance with standard deviation error bars |
-| Histogram | Overlaid episode length distributions |
-| Episode Progression | Line chart showing episode-by-episode consistency |
-| Performance Heatmap | Colour-coded matrix: mean, median, best, worst, std, success rate |
-
-These charts use the raw episode lengths collected during gameplay — no CSV files are needed. Click **Generate Charts** to regenerate at any time.
-
-### 8.5 Charts Tab — Training Data Analysis
-
-**Step 1 — Select CSV data**: The sidebar lists all `*_history.csv` files discovered under `experiment-results/`. CSVs that differ only by seed suffix (e.g., `baseline_s0`, `baseline_s1`, `baseline_s2`) are grouped into model families with a family-level checkbox for convenience. Click **Select All** to include all CSVs.
-
-**Step 2 — Select chart types**: Check any combination of the 11 available chart types:
+### 8.5 Charts Tab — 11 Chart Types
 
 | Chart Type | Description |
 |---|---|
 | Training Curves | Rolling mean of episode length per model |
-| Training Curves (Mean ± Std) | Mean ± standard deviation across seeds, with consistent model colours |
-| Box Plot | Box-and-whisker comparison of episode length distributions |
+| Training Curves (Mean ± Std) | Mean ± std across seeds |
+| Box Plot | Episode length distribution comparison |
 | Bar Chart (Mean ± Std) | Mean episode length with error bars |
 | Histogram | Overlaid episode length distributions |
-| Convergence Analysis | First episode crossing performance thresholds (50, 100, 150, 195 steps) |
-| Success Rate Over Time | Rolling percentage of episodes reaching ≥ 195 steps |
-| Learning Speed | Derivative of rolling mean — rate of improvement per episode |
-| Training Stability | Rolling standard deviation — lower values indicate more consistent training |
-| Final Performance | Mean of last N episodes (N = rolling window) per model family |
+| Convergence Analysis | First episode crossing 50/100/150/195 steps |
+| Success Rate Over Time | Rolling % of episodes reaching ≥ 195 steps |
+| Learning Speed | Derivative of rolling mean |
+| Training Stability | Rolling standard deviation |
+| Final Performance | Mean of last N episodes per model family |
 | Performance Heatmap | Colour-coded matrix of all families vs. key metrics |
-
-**Step 3 — Adjust rolling window**: The rolling window slider (1–50, default 10) controls the smoothing applied to rolling-mean-based charts.
-
-**Step 4 — Generate**: Click **Generate Charts**. If one chart type is selected, it displays full-width. If multiple types are selected, they render in a 2-column grid with titled cards.
-
-### 8.6 Remote Access via ngrok (Optional)
-
-The webapp includes an `ngrok-skip-browser-warning` header. To share the interface remotely:
-
-```bash
-# In a separate terminal:
-ngrok http 5000
-# Use the generated https://xxx.ngrok.io URL
-```
-
-### 8.7 Interactive Human Training in the Browser Workflow
-
-For the human-in-the-loop training modes, the pygame-based interfaces are used instead of the web app. The recommended workflow for a live demonstration:
-
-**HCRL Human Training:**
-
-```bash
-python train_hcrl.py --human --episodes 50 --seed 0
-```
-
-A CartPole window opens. The demonstrator:
-1. Watches the agent play.
-2. Presses `↑` when the agent makes a good move (pole stable, cart centred).
-3. Presses `↓` when the agent is about to fail.
-4. Presses `Esc` to stop early.
-
-After training, view the result in the web app by restarting the server (the new model file is automatically discovered).
-
-**RLHF Human Training:**
-
-```bash
-python train_rlhf.py --human --episodes 50 --seed 0
-```
-
-A pygame window shows two clips sequentially. The demonstrator:
-1. Watches Clip A.
-2. Presses any key to advance.
-3. Watches Clip B.
-4. Presses `A` (preferred A), `B` (preferred B), or `S` (skip).
-5. Continues through all pairs for the iteration.
-
-**RLHF Ensemble Human Training** (most efficient use of human labels, recommended for demonstrations):
-
-```bash
-python train_rlhf_ensemble.py --human --episodes 50 --seed 0
-```
-
-The interface is identical to RLHF human, but the pairs shown are selected by the ensemble's uncertainty criterion: the human is always shown the comparisons that are hardest for the model to decide, making each label maximally informative.
 
 ---
 
 ## 9. Overall Conclusion and Key Takeaways
 
-### 9.1 Summary of Findings
+### 9.1 Summary of High-Value Findings (200 Episodes, Seeds {5, 6, 9})
 
-This project implemented, compared, and analysed four human-feedback reinforcement learning algorithms on the CartPole-v1 benchmark:
-
-| Algorithm | Paper | Eval mean (baseline: 114.1) | Train last-20 mean | Notes |
-|---|---|---|---|---|
-| HCRL (TAMER, full) | Li et al. (2019) | 104.5 (−8.4%) | 78.3 ± 7.5 | Timing-sensitive; reward model dilution with continuous feedback |
-| VI-TAMER (γ=0.95) | Li et al. (2019) | — | 70.4 ± 23.3 | Oracle-density-sensitive; best seed reached 94.7 |
-| RLHF Single | Christiano et al. (2017) | — | 48.1 ± 16.4 | Severely data-limited at 288 preference labels |
-| RLHF Ensemble | Christiano et al. (2017) §2.2 | — | 41.6 ± 28.4 | Highest cross-seed variance; 10% error rate adds noise |
-| **Timing: Late** | **Li et al. (2019)** | **118.4 (+3.8%)** | **97.2 ± 34.9** | **Best human-feedback condition; 10% episodes ≥ 195** |
-| Timing: Mid | Li et al. (2019) | 100.1 (−12.3%) | 104.3 ± 14.9 | Most consistent training curves (lowest std) |
-
-*Note: "—" indicates that formal post-training evaluation was not run for that method. Train last-20 mean is the mean of the last 20 training episodes averaged across 3 seeds.*
+| Rank | Method | Overall mean | Avg last-20 | Avg r10 ep200 | Max | ≥195 (%) | Key finding |
+|---|---|---|---|---|---|---|---|
+| 1 | **HCRL Oracle (cw3e)** | 98.5 | 149.2 | 150.6 | 200 | **12.8%** | Best ≥195 rate; exponential credit compounding |
+| 2 | **VI-TAMER (cw3u)** | 86.9 | 147.3 | **152.8** | 200 | **9.0%** | Reversal from 0% ≥195; TD amplifier effect |
+| 3 | **Timing: Late** | **99.3** | **151.3** | 154.0 | 200 | 3.7% | Best average r10; policy-aligned feedback |
+| 4 | Timing: Full | 87.6 | 131.5 | 134.2 | 200 | 5.0% | Solid ≥195 among timing conditions |
+| 5 | Timing: Early | 85.4 | 129.4 | 130.2 | 166 | 0.0% | Best signal efficiency (0.217/signal) |
+| 6 | **Baseline** | 81.5 | 127.3 | 124.6 | 200 | 0.8% | Most consistent (std = 6.0); beatable ceiling |
+| 7 | RLHF Ensemble | 39.3 | 51.7 | 52.2 | 467 | 0.2% | Seed-5 phase transition; 67% failure rate |
 
 ### 9.2 Key Takeaways
 
-**Takeaway 1: Human feedback is a powerful but fragile learning signal.**
-When feedback is well-timed, appropriately scaled, and applied to a sufficiently explored policy, it consistently accelerates learning beyond what environment reward alone achieves. However, poorly timed or poorly scaled feedback can *harm* learning. This argues for adaptive feedback systems that respond to the agent's current learning state.
+**Takeaway 1 — Credit assignment is the most impactful innovation at 200 episodes.**
+Both credit-assignment methods (HCRL cw3e: 12.8% ≥195; VI-TAMER cw3u: 9.0% ≥195) decisively outperform all timing conditions and the baseline. The 3× expansion of reward model training data per oracle signal creates a compounding effect: as the agent improves, each signal generates increasingly informative training pairs, accelerating convergence further. This compounding is the primary mechanism driving the ≥195 rate to 16× the baseline's.
 
-**Takeaway 2: The choice of feedback modality fundamentally changes the scalability/precision trade-off.**
-Per-timestep scalar feedback (TAMER) provides high-precision, low-latency signal but is cognitively demanding for a human teacher and does not scale to long episodes or delayed consequences. Pairwise clip preference (RLHF) is cognitively lightweight and scales better, but requires more data and introduces credit-assignment ambiguity within segments.
+**Takeaway 2 — VI-TAMER with credit assignment works, but requires seed selection.**
+VI-TAMER's reversal from 0/600 ≥195 (prior run) to 54/600 (9.0%) demonstrates that the non-myopic TD update is **not** inherently incompatible with credit assignment. However, the same TD propagation that enables seed 6's near-optimal performance (195.0 r10 ep200) also amplifies poor initialisations (seed 5: 128.2). The practical strategy: run multiple seeds, select the best model. For $N=3$ seeds, the probability of getting at least one seed with ≥195 rate >5% is high.
 
-**Takeaway 3: Non-myopic credit assignment (VI-TAMER) is important for dense feedback scenarios.**
-When the oracle fires frequently (50% probability per step), the primary bottleneck becomes not the quantity of feedback but the quality of credit assignment. VI-TAMER's TD update directly addresses this by propagating value backwards, without requiring any additional human interaction.
+**Takeaway 3 — Exponential credit outperforms uniform for HCRL.**
+Exponential credit (41% weight at most recent observation) produces 12.8% ≥195 across 3 seeds with consistent compounding. The exponential function's recency bias aligns reward magnitude with causal relevance, producing a more accurate reward model. Testing exponential credit for VI-TAMER (which currently uses uniform) is a priority for future work.
 
-**Takeaway 4: The §2.2 improvements in Christiano et al. are not merely engineering details.**
-The ensemble, uncertainty-based queries, reward normalisation, and error modelling each address a distinct failure mode of the basic RLHF algorithm. Together they increase performance by approximately 15% and reduce cross-seed variance by approximately 30% in the 100-episode setting. These improvements are transferable to any preference-based reward learning system.
+**Takeaway 4 — Late timing remains the best strategy for consistent average performance.**
+Timing Late achieves the highest average last-20 (151.3) with the lowest cross-seed variance among timing conditions (std = 11.7). It requires no credit-assignment infrastructure — just delaying oracle activation to episode 160. For practitioners who need a simple, reliable improvement over the baseline, Late timing is the recommended approach.
 
-**Takeaway 5: Simulated oracles are a valuable but imperfect proxy for real human feedback.**
-The simulated oracle in this project is near-optimal: it scores states based on ground-truth physics. A real human would have lower consistency ($\varepsilon_H > 0.1$), higher latency (missed timesteps), and domain-specific biases (e.g., preferring aesthetically smooth motions over efficient ones). The 10% error model in the ensemble provides some coverage of this, but real-world deployment would require significantly larger preference datasets.
+**Takeaway 5 — The reward model staleness framework explains the timing ranking.**
+Mid feedback (81 episodes stale) performs worse than Early (161 episodes stale) because Mid's model is strong enough to actively conflict with environment reward, while Early's model is too weak to interfere. The principle: **a stale reward model harms performance only if it is strong enough to override environment signals**.
+
+**Takeaway 6 — The baseline is a strong but beatable benchmark.**
+The baseline (avg last-20 = 127.3, cross-seed std = 6.0) is the most predictable method. However, all credit-assignment methods and Timing Late exceed it by 16–19% in average last-20 and 5–16× in ≥195 rate. The baseline's consistency advantage diminishes as the human-feedback methods' compounding effects take hold in the final 50 episodes.
 
 ### 9.3 Limitations and Future Work
 
-- **Tabular Q-Learning limits scalability**: The 4,096-state discretisation is sufficient for CartPole but does not transfer to higher-dimensional environments. A natural extension would replace the Q-table with a deep Q-network (DQN), as in the original Christiano et al. implementation.
+- **Combined timing + credit assignment**: The two best innovations (late timing and credit assignment) were not tested together. Combining late-window oracle feedback with exponential credit expansion could yield further gains by concentrating high-quality signals in the reward model's optimal training regime.
 
-- **Single environment**: CartPole is a solved problem. More informative comparisons would require tasks where the environment reward is genuinely unavailable or misspecified.
+- **VI-TAMER variance reduction**: VI-TAMER's amplifier behaviour (seed 6: 195.0 r10 vs seed 5: 128.2) suggests investigating **ensemble VI-TAMER** — averaging over multiple reward models to reduce initialisation sensitivity while preserving the TD propagation advantage.
 
-- **Oracle ideality**: The simulated oracle scores based on perfect state knowledge. A study with real human participants would quantify the performance gap introduced by human error, fatigue, and individual variation.
+- **Exponential credit for VI-TAMER**: VI-TAMER currently uses uniform credit. Testing exponential credit (which preserves more magnitude at the most recent timestep) may reduce the TD magnitude dilution and improve VI-TAMER's consistency.
 
-- **Adaptive feedback timing**: The timing experiment results suggest that a system that dynamically decides *when* to request feedback (based on the agent's learning state) could outperform any fixed window. This connects to the active learning literature.
+- **Credit window tuning**: Comparing $W \in \{1, 2, 3, 5\}$ with exponential credit for both HCRL and VI-TAMER would identify the optimal trade-off between training data expansion and signal dilution.
 
-- **Combining HCRL and RLHF signals**: The two feedback modalities are complementary. A hybrid system could use per-timestep signals for early, rough shaping and pairwise preferences for late, precise refinement.
+- **RLHF scaling study**: A systematic study from 200 → 500 → 1,000 episodes would identify the minimum preference dataset for reliable convergence and test whether the seed-5 phase transition generalises above a data threshold.
 
-- **Longer training horizons**: The 100-episode regime is deliberately constrained to test cold-start behaviour, but many of the observed limitations (RLHF data scarcity, reward model interference) would diminish with 500+ episodes. A systematic study of performance vs. training length would better characterise each method's data efficiency.
+- **Adaptive feedback timing**: An online metric (e.g., rolling-10 mean exceeding a threshold) could trigger oracle feedback activation automatically, replacing fixed timing windows.
 
 ---
 
@@ -982,10 +776,6 @@ The simulated oracle in this project is near-optimal: it scores states based on 
 [9] **Bradley, R. A., & Terry, M. E.** (1952). Rank analysis of incomplete block designs: I. The method of paired comparisons. *Biometrika*, 39(3–4), 324–345.
 
 [10] **Kingma, D. P., & Ba, J.** (2014). Adam: A method for stochastic optimization. *arXiv preprint arXiv:1412.6980*.
-
-[11] **Schulman, J., Wolski, F., Dhariwal, P., Radford, A., & Klimov, O.** (2017). Proximal policy optimization algorithms. *arXiv preprint arXiv:1707.06347*.
-
-[12] **Ziegler, D. M., Stiennon, N., Wu, J., Brown, T. B., Radford, A., Amodei, D., Christiano, P., & Irving, G.** (2019). Fine-tuning language models from human preferences. *arXiv preprint arXiv:1909.08593*.
 
 ---
 

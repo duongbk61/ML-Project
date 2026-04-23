@@ -248,7 +248,7 @@ def _collect_human_preferences(screen, font_l, font_s, clock, seg_buf, n_pairs, 
 # Oracle training (automated)
 # ---------------------------------------------------------------------------
 
-def train(total_episodes: int, seed: int) -> None:
+def train(total_episodes: int, seed: int, skip_charts: bool = False) -> None:
     warmup_eps   = max(10, int(total_episodes * cfg.RLHF_WARMUP_FRACTION))
     remaining    = total_episodes - warmup_eps
     num_iter     = max(1, remaining // cfg.RLHF_EPISODES_PER_ITER)
@@ -320,7 +320,8 @@ def train(total_episodes: int, seed: int) -> None:
 
     _plot(episode_lengths, rm_losses, warmup_eps,
           f"RLHF (oracle) — {actual_total} eps, seed={seed}",
-          "tomato", out / f"rlhf_oracle_s{seed}_results.png")
+          "tomato", out / f"rlhf_oracle_s{seed}_results.png",
+          skip_charts=skip_charts)
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +471,7 @@ def _plot(
     title: str,
     color: str,
     save_path: pathlib.Path,
+    skip_charts: bool = False,
 ) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     fig.suptitle(title, fontsize=13)
@@ -498,18 +500,22 @@ def _plot(
     plt.tight_layout()
     plt.savefig(save_path, dpi=120)
     print(f"Plot saved to {save_path}")
-    plt.show()
+    if not skip_charts:
+        plt.show()
+    plt.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RLHF training (oracle or human preferences)")
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--seed",     type=int, default=0)
-    parser.add_argument("--human",    action="store_true",
+    parser.add_argument("--human",       action="store_true",
                         help="Use real human clip comparisons instead of simulated oracle")
+    parser.add_argument("--skip-charts", action="store_true",
+                        help="Save plots to disk but do not display them (for batch runs)")
     args = parser.parse_args()
 
     if args.human:
         train_human(args.episodes, args.seed)
     else:
-        train(args.episodes, args.seed)
+        train(args.episodes, args.seed, skip_charts=args.skip_charts)

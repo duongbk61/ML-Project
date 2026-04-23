@@ -102,14 +102,17 @@ def _log_timestep(index: int, action: Action, reward: Reward, observation: Obser
 def main() -> None:
     parser = argparse.ArgumentParser(description="Baseline Q-Learning training")
     parser.add_argument("--episodes", type=int, default=100)
+    parser.add_argument("--seed", type=int, default=None, help="Run a single seed (default: run all cfg.SEEDS)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
     out_dir = pathlib.Path(f"experiment-results/ep{args.episodes}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    seeds = [args.seed] if args.seed is not None else cfg.SEEDS
+
     all_lengths = []
-    for seed in cfg.SEEDS:
+    for seed in seeds:
         print(f"\n--- Baseline seed={seed} ---")
         rng = np.random.default_rng(seed=seed)
         env = gym.make("CartPole-v1", render_mode="human" if args.verbose else None)

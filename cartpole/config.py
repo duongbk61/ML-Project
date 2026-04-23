@@ -50,6 +50,14 @@ HCRL_RM_LR:     float = 1e-3       # HCRLRewardModel Adam learning rate
 HCRL_RM_HIDDEN: int   = 64         # hidden layer width
 HCRL_RM_EPOCHS: int   = 20         # gradient steps per reward-model update
 
+# Credit Assignment Function (CAF) — Knox & Stone (2009) §3
+# When feedback fires at step t, credit is distributed over the last
+# HCRL_CREDIT_WINDOW observations using the chosen function.
+# credit_window=1 → original pointwise TAMER (no spreading).
+HCRL_CREDIT_WINDOW: int   = 3      # steps to distribute credit over
+HCRL_CREDIT_FN:     str   = "exp"  # "uniform" | "exp" | "gaussian"
+HCRL_CREDIT_DECAY:  float = 0.8    # exponential decay rate (for HCRL_CREDIT_FN="exp")
+
 # ---------------------------------------------------------------------------
 # Baseline terminate penalty (pure Q-Learning, env-reward scale ~1/step)
 # ---------------------------------------------------------------------------
@@ -90,7 +98,7 @@ RLHF_RM_HIDDEN:       int   = 64     # hidden layer width
 
 ENSEMBLE_N_MODELS:        int   = 3               # ensemble size K
 ENSEMBLE_CANDIDATES_MULT: int   = 10              # candidate pairs = mult × PAIRS_PER_ITER
-ENSEMBLE_ERROR_PROB:      float = 0.1             # oracle human-error rate (§2.2.3)
+ENSEMBLE_ERROR_PROB:      float = 0.01             # oracle human-error rate (§2.2.3)
 ENSEMBLE_VAL_FRACTION:    float = 1.0 / 2.718281828  # validation split ≈ 1/e
 
 # ---------------------------------------------------------------------------
@@ -112,7 +120,7 @@ ORACLE_BAD_POS_STAB:    float = 0.25   # pos_stab below this → clearly bad
 # Experiment design
 # ---------------------------------------------------------------------------
 
-SEEDS: list[int] = [0, 1, 2]
+SEEDS: list[int] = [5, 6, 9]
 
 # Feedback timing conditions (as fractions of total episodes)  [HCRL §IV]
 TIMING_CONDITIONS: dict[str, tuple[float, float]] = {

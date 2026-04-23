@@ -55,6 +55,36 @@ def make_vi_tamer_agent(rng: np.random.Generator, *, discount: float = cfg.VI_TA
 
 
 # ---------------------------------------------------------------------------
+# Credit Assignment Function (CAF)  [TAMER — Knox & Stone 2009, §3]
+# ---------------------------------------------------------------------------
+
+def _compute_credit_weights(n: int, fn: str, decay: float) -> np.ndarray:
+    """
+    Return normalised credit weights for n recent steps.
+
+    Index 0 = most recent step (lag=0), index n-1 = oldest step (lag=n-1).
+
+    Parameters
+    ----------
+    fn    : "uniform" | "exp" | "gaussian"
+    decay : exponential decay rate — used only when fn="exp"
+            w_i = decay**i, so recent steps get higher weight.
+    """
+    lags = np.arange(n, dtype=float)
+    if fn == "uniform":
+        w = np.ones(n)
+    elif fn == "exp":
+        w = decay ** lags
+    elif fn == "gaussian":
+        sigma = max(n / 3.0, 1.0)
+        w = np.exp(-0.5 * (lags / sigma) ** 2)
+    else:
+        raise ValueError(f"Unknown credit_fn '{fn}'. Choose 'uniform', 'exp', or 'gaussian'.")
+    total = w.sum()
+    return w / total if total > 0 else np.ones(n) / n
+
+
+# ---------------------------------------------------------------------------
 # HCRL / TAMER episode runner  [HCRL §III-A  — Knox & Stone 2009]
 # ---------------------------------------------------------------------------
 
@@ -68,39 +98,55 @@ def run_hcrl_episode(
     in_feedback_window: bool = True,
     terminate_penalty: float = cfg.HCRL_TERMINATE_PENALTY,
     oracle_fn=None,
+    credit_window: int = cfg.HCRL_CREDIT_WINDOW,
+    credit_fn: str = cfg.HCRL_CREDIT_FN,
+    credit_decay: float = cfg.HCRL_CREDIT_DECAY,
 ) -> tuple[int, list[np.ndarray], list[float], list[dict]]:
     """
-    Run one HCRL episode.
+    Run one HCRL episode with credit assignment.
 
-    The oracle fires with HCRL_TRIGGER_PROB at each timestep when
-    `in_feedback_window` is True.  The reward model fills silent timesteps.
-    Env reward is the fallback when the model has not been trained yet.
+    When the oracle fires at timestep t with signal f, the feedback is
+    distributed over the last `credit_window` observations using the Credit
+    Assignment Function (CAF).  The reward model is trained on these
+    credit-weighted (obs, reward) pairs, so R̂_H generalises to states that
+    *led to* the feedback state, not just the state where feedback was given.
+
+    Set credit_window=1 for original pointwise TAMER behaviour.
 
     Parameters
     ----------
-    oracle_fn : callable(obs, weight, rng) -> float, defaults to oracle_feedback
+    oracle_fn     : callable(obs, weight, rng) -> float, defaults to oracle_feedback
+    credit_window : steps to spread credit over (1 = no spreading)
+    credit_fn     : "uniform" | "exp" | "gaussian"
+    credit_decay  : exponential decay rate (used when credit_fn="exp")
 
     Returns
     -------
     episode_length  : int
-    new_obs         : list of observations where oracle fired
-    new_rewards     : list of oracle signals (paired with new_obs)
-    feedback_log    : list of dicts (one per oracle signal)
+    new_obs         : list of observations (credit-expanded)
+    new_rewards     : list of credit-weighted oracle signals (paired with new_obs)
+    feedback_log    : list of dicts (one per oracle signal, at the fired timestep)
     """
     from cartpole.oracle import oracle_feedback
     oracle_fn = oracle_fn or oracle_feedback
 
     model_ready = reward_model is not None
 
-    ep_obs:    list[np.ndarray] = []
-    ep_rew:    list[float]      = []
-    fb_log:    list[dict]       = []
+    ep_obs:     list[np.ndarray] = []
+    ep_rew:     list[float]      = []
+    fb_log:     list[dict]       = []
+    recent_obs: list[np.ndarray] = []   # rolling window for credit assignment
     t0 = time.time()
 
     obs, _ = env.reset()
     action = agent.begin_episode(obs)
 
     for t in range(cfg.MAX_TIMESTEPS):
+        # Maintain rolling window of recent observations
+        recent_obs.append(obs.copy())
+        if len(recent_obs) > credit_window:
+            recent_obs.pop(0)
+
         next_obs, env_reward, terminated, truncated, _ = env.step(action)
 
         oracle_signal: float = 0.0
@@ -108,8 +154,13 @@ def run_hcrl_episode(
             oracle_signal = oracle_fn(obs, feedback_weight, rng)
 
         if oracle_signal != 0.0:
-            ep_obs.append(obs.copy())
-            ep_rew.append(oracle_signal)
+            # Distribute credit over the recent observation window.
+            # reversed(recent_obs): index 0 = obs_t (lag=0), index n-1 = oldest.
+            n = len(recent_obs)
+            weights = _compute_credit_weights(n, credit_fn, credit_decay)
+            for i, past_obs in enumerate(reversed(recent_obs)):
+                ep_obs.append(past_obs)
+                ep_rew.append(oracle_signal * float(weights[i]))
             shaped = oracle_signal
             fb_log.append({
                 "timestamp":     time.time() - t0,
@@ -149,25 +200,39 @@ def run_vi_tamer_episode(
     feedback_weight: float = cfg.HCRL_FEEDBACK_WEIGHT,
     in_feedback_window: bool = True,
     terminate_penalty: float = cfg.HCRL_TERMINATE_PENALTY,
+    credit_window: int = cfg.HCRL_CREDIT_WINDOW,
+    credit_fn: str = cfg.HCRL_CREDIT_FN,
+    credit_decay: float = cfg.HCRL_CREDIT_DECAY,
 ) -> tuple[int, list[np.ndarray], list[float], list[dict]]:
     """
-    Run one VI-TAMER episode using act_vi() for non-myopic TD updates.
+    Run one VI-TAMER episode with credit assignment, using act_vi() for
+    non-myopic TD updates.
 
-    Same signature as run_hcrl_episode() so callers can be swapped.
+    Credit assignment distributes oracle feedback over `credit_window` recent
+    observations, improving R̂_H training the same way as in run_hcrl_episode().
+    Set credit_window=1 for original pointwise VI-TAMER behaviour.
+
+    Same return signature as run_hcrl_episode() so callers can be swapped.
     """
     from cartpole.oracle import oracle_feedback
 
     model_ready = reward_model is not None
 
-    ep_obs:    list[np.ndarray] = []
-    ep_rew:    list[float]      = []
-    fb_log:    list[dict]       = []
+    ep_obs:     list[np.ndarray] = []
+    ep_rew:     list[float]      = []
+    fb_log:     list[dict]       = []
+    recent_obs: list[np.ndarray] = []   # rolling window for credit assignment
     t0 = time.time()
 
     obs, _ = env.reset()
     action = agent.begin_episode(obs)
 
     for t in range(cfg.MAX_TIMESTEPS):
+        # Maintain rolling window of recent observations
+        recent_obs.append(obs.copy())
+        if len(recent_obs) > credit_window:
+            recent_obs.pop(0)
+
         next_obs, env_reward, terminated, truncated, _ = env.step(action)
 
         oracle_signal: float = 0.0
@@ -175,8 +240,12 @@ def run_vi_tamer_episode(
             oracle_signal = oracle_feedback(obs, feedback_weight, rng)
 
         if oracle_signal != 0.0:
-            ep_obs.append(obs.copy())
-            ep_rew.append(oracle_signal)
+            # Distribute credit over the recent observation window.
+            n = len(recent_obs)
+            weights = _compute_credit_weights(n, credit_fn, credit_decay)
+            for i, past_obs in enumerate(reversed(recent_obs)):
+                ep_obs.append(past_obs)
+                ep_rew.append(oracle_signal * float(weights[i]))
             fb_log.append({
                 "timestamp":     time.time() - t0,
                 "episode_step":  t,

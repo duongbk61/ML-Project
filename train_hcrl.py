@@ -193,15 +193,26 @@ def save_history(history: EpisodeHistory, experiment_dir: str,
 # Oracle training (automated)
 # ---------------------------------------------------------------------------
 
-def train(total_episodes: int, seed: int, feedback_weight: float = cfg.HCRL_FEEDBACK_WEIGHT) -> None:
+def train(
+    total_episodes: int,
+    seed: int,
+    feedback_weight: float = cfg.HCRL_FEEDBACK_WEIGHT,
+    credit_window: int = cfg.HCRL_CREDIT_WINDOW,
+    credit_fn: str = cfg.HCRL_CREDIT_FN,
+    credit_decay: float = cfg.HCRL_CREDIT_DECAY,
+    skip_charts: bool = False,
+) -> None:
     """Train HCRL with simulated oracle feedback (no human required)."""
-    out = pathlib.Path(cfg.experiment_dir(total_episodes, f"hcrl-oracle-fw{feedback_weight:g}"))
+    ca_tag = f"-cw{credit_window}{credit_fn[0]}" if credit_window > 1 else ""
+    out = pathlib.Path(cfg.experiment_dir(total_episodes, f"hcrl-oracle-fw{feedback_weight:g}{ca_tag}"))
     out.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
     print(f"  HCRL (oracle)  —  {total_episodes} episodes  seed={seed}")
     print(f"  Oracle trigger prob : {cfg.HCRL_TRIGGER_PROB}")
     print(f"  Feedback weight     : ±{feedback_weight}")
+    print(f"  Credit window       : {credit_window}  fn={credit_fn}"
+          + (f"  decay={credit_decay}" if credit_fn == "exp" else ""))
     print(f"  Output: {out}")
     print("=" * 60)
 
@@ -225,6 +236,9 @@ def train(total_episodes: int, seed: int, feedback_weight: float = cfg.HCRL_FEED
             env, agent, reward_model if model_ready else None, rng,
             in_feedback_window=True,
             feedback_weight=feedback_weight,
+            credit_window=credit_window,
+            credit_fn=credit_fn,
+            credit_decay=credit_decay,
         )
         episode_lengths.append(ep_len)
         rm_obs_buf.extend(new_obs)
@@ -254,7 +268,8 @@ def train(total_episodes: int, seed: int, feedback_weight: float = cfg.HCRL_FEED
 
     _plot(episode_lengths, rm_losses, total_feedback,
           f"HCRL (oracle) — {total_episodes} eps, seed={seed}, {total_feedback} signals",
-          "forestgreen", out / f"hcrl_oracle_s{seed}_results.png")
+          "forestgreen", out / f"hcrl_oracle_s{seed}_results.png",
+          skip_charts=skip_charts)
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +354,7 @@ def train_human(total_episodes: int, seed: int, feedback_weight: float = cfg.HCR
                 action = agent.act(next_obs, shaped)
                 obs = next_obs
 
-                time.sleep(0.05)
+                time.sleep(0.01)
 
                 if terminated or truncated:
                     break
@@ -396,6 +411,7 @@ def _plot(
     title: str,
     color: str,
     save_path: pathlib.Path,
+    skip_charts: bool = False,
 ) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     fig.suptitle(title, fontsize=13)
@@ -423,7 +439,9 @@ def _plot(
     plt.tight_layout()
     plt.savefig(save_path, dpi=120)
     print(f"Plot saved to {save_path}")
-    plt.show()
+    if not skip_charts:
+        plt.show()
+    plt.close()
 
 
 def save_history_csv_simple(episode_lengths: list[int], path: pathlib.Path) -> None:
@@ -438,11 +456,22 @@ if __name__ == "__main__":
     parser.add_argument("--seed",            type=int,   default=0)
     parser.add_argument("--feedback-weight", type=float, default=cfg.HCRL_FEEDBACK_WEIGHT,
                         help="Magnitude of +/- oracle reward signal (default: %(default)s)")
-    parser.add_argument("--human",    action="store_true",
+    parser.add_argument("--credit-window", type=int, default=cfg.HCRL_CREDIT_WINDOW,
+                        help="Steps to spread credit over (1=pointwise, default: %(default)s)")
+    parser.add_argument("--credit-fn", type=str, default=cfg.HCRL_CREDIT_FN,
+                        choices=["uniform", "exp", "gaussian"],
+                        help="Credit assignment function (default: %(default)s)")
+    parser.add_argument("--credit-decay", type=float, default=cfg.HCRL_CREDIT_DECAY,
+                        help="Exponential decay rate, used when --credit-fn=exp (default: %(default)s)")
+    parser.add_argument("--human",       action="store_true",
                         help="Use real human arrow-key feedback instead of simulated oracle")
+    parser.add_argument("--skip-charts", action="store_true",
+                        help="Save plots to disk but do not display them (for batch runs)")
     args = parser.parse_args()
 
     if args.human:
         train_human(args.episodes, args.seed, args.feedback_weight)
     else:
-        train(args.episodes, args.seed, args.feedback_weight)
+        train(args.episodes, args.seed, args.feedback_weight,
+              args.credit_window, args.credit_fn, args.credit_decay,
+              skip_charts=args.skip_charts)

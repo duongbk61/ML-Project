@@ -27,7 +27,10 @@
       "Bash(.venv/Scripts/python.exe train_rlhf_ensemble.py --episodes 100 --seed 2)",
       "Bash(.venv/Scripts/python.exe feedback_timing_experiment.py --episodes 100 --auto)",
       "Bash(.venv/Scripts/python.exe compare_models.py --episodes 100 --eval-episodes 100)",
-      "Bash(.venv/Scripts/python.exe _stats.py)"
+      "Bash(.venv/Scripts/python.exe _stats.py)",
+      "Bash(python -c ' *)",
+      "Bash(python3 -c \"import pandas; import numpy; print\\('OK'\\)\")",
+      "Bash(grep -n \"q_h_table\\\\|q_table\\\\|def load\\\\|def save\" d:/KHDL/SML/ML-Project/cartpole/*.py)"
     ]
   }
 }

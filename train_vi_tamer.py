@@ -55,14 +55,26 @@ from cartpole.train_utils import (
 # Oracle training (automated)
 # ---------------------------------------------------------------------------
 
-def train(total_episodes: int, seed: int, gamma: float, feedback_weight: float = cfg.HCRL_FEEDBACK_WEIGHT) -> None:
-    out = pathlib.Path(cfg.experiment_dir(total_episodes, f"vi-tamer-fw{feedback_weight:g}"))
+def train(
+    total_episodes: int,
+    seed: int,
+    gamma: float,
+    feedback_weight: float = cfg.HCRL_FEEDBACK_WEIGHT,
+    credit_window: int = cfg.HCRL_CREDIT_WINDOW,
+    credit_fn: str = cfg.HCRL_CREDIT_FN,
+    credit_decay: float = cfg.HCRL_CREDIT_DECAY,
+    skip_charts: bool = False,
+) -> None:
+    ca_tag = f"-cw{credit_window}{credit_fn[0]}" if credit_window > 1 else ""
+    out = pathlib.Path(cfg.experiment_dir(total_episodes, f"vi-tamer-fw{feedback_weight:g}{ca_tag}"))
     out.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
     print(f"  VI-TAMER  —  {total_episodes} episodes  seed={seed}  γ={gamma}")
     print(f"  Oracle trigger prob : {cfg.HCRL_TRIGGER_PROB}")
     print(f"  Feedback weight     : ±{feedback_weight}")
+    print(f"  Credit window       : {credit_window}  fn={credit_fn}"
+          + (f"  decay={credit_decay}" if credit_fn == "exp" else ""))
     print(f"  Output: {out}")
     print("=" * 60)
     print(f"\n  TAMER (γ=0): policy = argmax_a R_H(s,a) [immediate]")
@@ -88,6 +100,9 @@ def train(total_episodes: int, seed: int, gamma: float, feedback_weight: float =
             env, agent, reward_model if model_ready else None, rng,
             in_feedback_window=True,
             feedback_weight=feedback_weight,
+            credit_window=credit_window,
+            credit_fn=credit_fn,
+            credit_decay=credit_decay,
         )
         episode_lengths.append(ep_len)
         rm_obs_buf.extend(new_obs)
@@ -117,7 +132,8 @@ def train(total_episodes: int, seed: int, gamma: float, feedback_weight: float =
 
     _plot(episode_lengths, rm_losses, total_feedback, gamma,
           f"VI-TAMER (γ={gamma}) — {total_episodes} eps, seed={seed}",
-          "steelblue", out / f"vi_tamer_s{seed}_results.png")
+          "steelblue", out / f"vi_tamer_s{seed}_results.png",
+          skip_charts=skip_charts)
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +226,7 @@ def train_human(total_episodes: int, seed: int, gamma: float, feedback_weight: f
                 )
                 obs = next_obs
 
-                time.sleep(0.05)
+                time.sleep(0.01)
 
                 if terminated or truncated:
                     break
@@ -268,6 +284,7 @@ def _plot(
     title: str,
     color: str,
     save_path: pathlib.Path,
+    skip_charts: bool = False,
 ) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     fig.suptitle(title, fontsize=13)
@@ -295,7 +312,9 @@ def _plot(
     plt.tight_layout()
     plt.savefig(save_path, dpi=120)
     print(f"Plot saved to {save_path}")
-    plt.show()
+    if not skip_charts:
+        plt.show()
+    plt.close()
 
 
 if __name__ == "__main__":
@@ -306,11 +325,22 @@ if __name__ == "__main__":
                         help="Discount factor γ (0 = plain TAMER)")
     parser.add_argument("--feedback-weight", type=float, default=cfg.HCRL_FEEDBACK_WEIGHT,
                         help="Magnitude of +/- oracle reward signal (default: %(default)s)")
-    parser.add_argument("--human",    action="store_true",
+    parser.add_argument("--credit-window", type=int, default=cfg.HCRL_CREDIT_WINDOW,
+                        help="Steps to spread credit over (1=pointwise, default: %(default)s)")
+    parser.add_argument("--credit-fn", type=str, default=cfg.HCRL_CREDIT_FN,
+                        choices=["uniform", "exp", "gaussian"],
+                        help="Credit assignment function (default: %(default)s)")
+    parser.add_argument("--credit-decay", type=float, default=cfg.HCRL_CREDIT_DECAY,
+                        help="Exponential decay rate, used when --credit-fn=exp (default: %(default)s)")
+    parser.add_argument("--human",       action="store_true",
                         help="Use real human arrow-key feedback instead of simulated oracle")
+    parser.add_argument("--skip-charts", action="store_true",
+                        help="Save plots to disk but do not display them (for batch runs)")
     args = parser.parse_args()
 
     if args.human:
         train_human(args.episodes, args.seed, args.gamma, args.feedback_weight)
     else:
-        train(args.episodes, args.seed, args.gamma, args.feedback_weight)
+        train(args.episodes, args.seed, args.gamma, args.feedback_weight,
+              args.credit_window, args.credit_fn, args.credit_decay,
+              skip_charts=args.skip_charts)

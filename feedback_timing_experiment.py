@@ -138,7 +138,12 @@ def save_history(history, experiment_dir, filename="hcrl_episode_history.csv"):
 # Run experiment
 # ---------------------------------------------------------------------------
 
-def run_experiment(max_episodes: int, auto: bool, experiment_dir: pathlib.Path) -> None:
+def run_experiment(
+    max_episodes: int,
+    auto: bool,
+    experiment_dir: pathlib.Path,
+    feedback_weight: float = cfg.HCRL_FEEDBACK_WEIGHT,
+) -> None:
     """Run all 4 timing conditions × 3 seeds (oracle or human)."""
     experiment_dir.mkdir(parents=True, exist_ok=True)
     conditions = get_conditions(max_episodes)
@@ -154,6 +159,7 @@ def run_experiment(max_episodes: int, auto: bool, experiment_dir: pathlib.Path) 
         print(f"  CONDITION {i + 1}/{len(conditions)}: {label}")
         print(f"  Feedback window: Episode {window[0]} → {window[1]}")
         print(f"  Total episodes: {max_episodes}  |  Seeds: {SEEDS}")
+        print(f"  Feedback weight: ±{feedback_weight}")
         print(f"  Mode: {'Oracle (automated)' if auto else 'Human (interactive)'}")
         print("#" * 60)
 
@@ -164,6 +170,7 @@ def run_experiment(max_episodes: int, auto: bool, experiment_dir: pathlib.Path) 
             if auto:
                 history, feedback_log, agent, reward_model = run_oracle_condition(
                     name=name, window=window, max_episodes=max_episodes, seed=seed,
+                    feedback_weight=feedback_weight,
                 )
                 save_history(history, str(experiment_dir),
                              filename=f"{name}_s{seed}_history.csv")
@@ -485,12 +492,16 @@ if __name__ == "__main__":
                         help="Skip training, only run analysis on existing results")
     parser.add_argument("--skip-charts", action="store_true",
                         help="Skip chart generation and plt.show()")
+    parser.add_argument("--feedback-weight", type=float, default=cfg.HCRL_FEEDBACK_WEIGHT,
+                        help="Magnitude of +/- oracle reward signal (default: %(default)s)")
     args = parser.parse_args()
 
-    experiment_dir = pathlib.Path(f"experiment-results/ep{args.episodes}/timing-experiment")
+    fw_tag = f"-fw{args.feedback_weight:g}" if args.feedback_weight != cfg.HCRL_FEEDBACK_WEIGHT else ""
+    experiment_dir = pathlib.Path(f"experiment-results/ep{args.episodes}/timing-experiment{fw_tag}")
 
     if not args.analyze:
-        run_experiment(max_episodes=args.episodes, auto=args.auto, experiment_dir=experiment_dir)
+        run_experiment(max_episodes=args.episodes, auto=args.auto, experiment_dir=experiment_dir,
+                       feedback_weight=args.feedback_weight)
 
     if not args.skip_charts:
         analyze_experiment(max_episodes=args.episodes, experiment_dir=experiment_dir)

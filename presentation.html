@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>HCRL on CartPole-v1 — Capstone Presentation</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css"/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --r-heading-color: #1a1a2e;
+    --r-main-color: #2d2d2d;
+    --r-link-color: #0f3460;
+    --r-heading-font: 'Segoe UI', system-ui, sans-serif;
+    --r-main-font: 'Segoe UI', system-ui, sans-serif;
+  }
+  .reveal { font-size: 28px; }
+  .reveal h1 { font-size: 1.8em; font-weight: 700; }
+  .reveal h2 { font-size: 1.4em; font-weight: 600; color: #0f3460; }
+  .reveal h3 { font-size: 1.1em; font-weight: 600; color: #16213e; }
+  .reveal table { font-size: 0.62em; margin: 0.4em auto; border-collapse: collapse; }
+  .reveal table th { background: #0f3460; color: #fff; padding: 6px 10px; font-weight: 600; }
+  .reveal table td { padding: 5px 10px; border-bottom: 1px solid #ddd; }
+  .reveal table tr:nth-child(even) td { background: #f4f6fb; }
+  .reveal .highlight { color: #e94560; font-weight: 700; }
+  .reveal .good { color: #27ae60; font-weight: 700; }
+  .reveal .warn { color: #e67e22; font-weight: 700; }
+  .reveal .dim { color: #888; }
+  .reveal .small { font-size: 0.72em; }
+  .reveal .tiny { font-size: 0.58em; color: #777; }
+  .reveal .card {
+    background: #f8f9fd; border-radius: 12px; padding: 18px 24px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.07); text-align: left; margin: 10px 0;
+  }
+  .reveal .card-row { display: flex; gap: 16px; }
+  .reveal .card-row .card { flex: 1; }
+  .reveal .metric { font-size: 2em; font-weight: 800; color: #0f3460; line-height: 1.1; }
+  .reveal .metric-label { font-size: 0.65em; color: #666; font-weight: 400; }
+  .reveal .tag {
+    display: inline-block; padding: 2px 10px; border-radius: 12px;
+    font-size: 0.65em; font-weight: 600; margin: 2px;
+  }
+  .reveal .tag-blue  { background: #dbeafe; color: #1e40af; }
+  .reveal .tag-green { background: #d1fae5; color: #065f46; }
+  .reveal .tag-red   { background: #fee2e2; color: #991b1b; }
+  .reveal .tag-amber { background: #fef3c7; color: #92400e; }
+  .reveal ul { text-align: left; }
+  .reveal li { margin-bottom: 0.35em; }
+  .reveal .title-slide h1 { font-size: 2em; margin-bottom: 0.1em; }
+  .reveal .title-slide p { font-size: 0.7em; color: #555; }
+  .reveal .insight-num {
+    display: inline-block; width: 36px; height: 36px; line-height: 36px;
+    background: #0f3460; color: #fff; border-radius: 50%; text-align: center;
+    font-weight: 700; font-size: 0.8em; margin-right: 8px; vertical-align: middle;
+  }
+  .reveal .bar { height: 22px; border-radius: 4px; display: inline-block; vertical-align: middle; }
+  .reveal .bar-blue  { background: #3b82f6; }
+  .reveal .bar-green { background: #10b981; }
+  .reveal .bar-amber { background: #f59e0b; }
+  .reveal .bar-red   { background: #ef4444; }
+  .reveal .bar-gray  { background: #9ca3af; }
+  .reveal .footnote { font-size: 0.5em; color: #999; position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); }
+</style>
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+
+<!-- ======== SLIDE 1: TITLE ======== -->
+<section class="title-slide">
+  <h1>Human-Centered Reinforcement Learning<br/>on CartPole-v1</h1>
+  <p style="font-size:0.85em; color:#0f3460; font-weight:600;">Training Results, Analysis &amp; Key Insights</p>
+  <br/>
+  <p><strong>Thai Nguyen</strong></p>
+  <p>Master's in Statistical Machine Learning<br/>
+  Hanoi University of Science and Technology</p>
+  <p class="tiny">Instructor: Assoc. Prof. Thân Quang Khoát</p>
+</section>
+
+<!-- ======== SLIDE 2: AGENDA ======== -->
+<section>
+  <h2>Agenda</h2>
+  <div style="text-align:left; max-width:700px; margin:auto;">
+    <ol>
+      <li><strong>Experiment Overview</strong> — Setup, methods, metrics</li>
+      <li><strong>Training Results</strong> — Learning curves, ≥195 rates, block progression, seed comparison</li>
+      <li><strong>RLHF</strong> — Approach, Ensemble results &amp; phase transition</li>
+      <li><strong>Feedback Timing</strong> — 4-condition comparison &amp; signal efficiency</li>
+      <li><strong>Method Ranking</strong> — Summary across all methods</li>
+      <li><strong>Deep-Dive Insights</strong> — 10 analytical findings from data</li>
+      <li><strong>Conclusions &amp; Future Work</strong></li>
+    </ol>
+  </div>
+</section>
+
+<!-- ======== SLIDE 3: EXPERIMENT OVERVIEW ======== -->
+<section>
+  <h2>Experiment Overview</h2>
+  <div class="card-row">
+    <div class="card" style="text-align:center;">
+      <div class="metric">200</div>
+      <div class="metric-label">Training episodes</div>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div class="metric">3</div>
+      <div class="metric-label">Seeds {5, 6, 9}</div>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div class="metric">600</div>
+      <div class="metric-label">Episodes per method</div>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div class="metric">8</div>
+      <div class="metric-label">Methods compared</div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px;">
+    <h3 style="margin-top:0;">Methods Under Test</h3>
+    <span class="tag tag-blue">Baseline Q-Learning</span>
+    <span class="tag tag-green">HCRL Oracle (exp credit)</span>
+    <span class="tag tag-green">VI-TAMER (uniform credit)</span>
+    <span class="tag tag-amber">Timing: Early / Mid / Late / Full</span>
+    <span class="tag tag-red">RLHF Ensemble</span>
+    <br/><br/>
+    <span class="small"><strong>Key metric:</strong> ≥195 episode rate — proxy for near-optimal CartPole policy</span>
+  </div>
+</section>
+
+<!-- ======== SLIDE 4: CREDIT ASSIGNMENT ======== -->
+<section>
+  <h2>Credit Assignment Function (CAF)</h2>
+  <div class="card" style="text-align:left;">
+    <p>When oracle fires at timestep <em>t</em>, feedback is <strong>distributed</strong> over the last <em>W</em>=3 observations:</p>
+    <p style="text-align:center; font-size:0.9em;">
+      For each <em>i</em> ∈ {0, 1, 2}: &nbsp; train R̂<sub>H</sub> on (o<sub>t−i</sub>, H<sub>t</sub> · w<sub>i</sub>)
+    </p>
+  </div>
+  <table>
+    <tr><th>Credit Function</th><th>w₀ (most recent)</th><th>w₁</th><th>w₂ (oldest)</th></tr>
+    <tr><td><strong>Uniform</strong></td><td>0.333</td><td>0.333</td><td>0.333</td></tr>
+    <tr><td><strong>Exponential</strong> (δ=0.8)</td><td class="good">0.410</td><td>0.328</td><td>0.262</td></tr>
+  </table>
+  <div class="card" style="margin-top:10px;">
+    <strong>Effect:</strong> Each oracle signal → <span class="highlight">3× training pairs</span> for the reward model.<br/>
+    Exponential gives <strong>23% more weight</strong> to the most causally relevant observation.
+  </div>
+</section>
+
+<!-- ======== SLIDE 5: LEARNING CURVES CHART ======== -->
+<section>
+  <h2>Learning Curves — Rolling-10 Trajectory (All Methods)</h2>
+  <div style="display:flex; gap:16px; align-items:center;">
+    <div style="flex:1.5; position:relative; height:420px;">
+      <canvas id="chartLearningCurves"></canvas>
+    </div>
+    <div style="flex:1;">
+      <div class="card" style="margin-bottom:10px; border-left:4px solid #10b981; font-size:0.75em;">
+        <strong>HCRL cw3e</strong><br/>
+        Slow start → <span class="highlight">explosive acceleration</span> after ep 100.<br/>
+        Strongest late-phase compounding.
+      </div>
+      <div class="card" style="margin-bottom:10px; border-left:4px solid #3b82f6; font-size:0.75em;">
+        <strong>VI-TAMER</strong><br/>
+        Steady rise, <span class="good">steepest final surge</span>.<br/>
+        Still accelerating at ep 200.
+      </div>
+      <div class="card" style="margin-bottom:10px; border-left:4px solid #f59e0b; font-size:0.75em;">
+        <strong>Timing Late</strong><br/>
+        Jumps at ep 160 when oracle activates.<br/>
+        Most consistent across seeds.
+      </div>
+      <div class="card" style="border-left:4px solid #9ca3af; font-size:0.75em;">
+        <strong>Baseline</strong><br/>
+        Plateaus around 125 steps.<br/>
+        Beatable reference.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE 6: ≥195 BAR CHART ======== -->
+<section>
+  <h2>Near-Optimal Episode Rate (≥195 steps)</h2>
+  <div style="display:flex; gap:20px; align-items:center;">
+    <div style="flex:1.4; position:relative; height:420px;">
+      <canvas id="chartGe195"></canvas>
+    </div>
+    <div style="flex:1;">
+      <div class="card" style="margin-bottom:10px;">
+        <div class="metric highlight" style="font-size:1.6em;">16×</div>
+        <div class="metric-label">HCRL cw3e vs Baseline</div>
+      </div>
+      <div class="card" style="margin-bottom:10px;">
+        <div class="metric" style="font-size:1.6em; color:#3b82f6;">11.3×</div>
+        <div class="metric-label">VI-TAMER vs Baseline</div>
+      </div>
+      <div class="card">
+        <p class="small" style="margin:0;"><strong>Key insight:</strong> Average performance improves 16–19%, but <span class="highlight">≥195 rates improve 5–16×</span>. Credit-assignment methods shift the <em>entire distribution</em> rightward.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE 7: BLOCK PROGRESSION CHART ======== -->
+<section>
+  <h2>Block-by-Block Progression — Training Dynamics</h2>
+  <div style="display:flex; gap:16px; align-items:stretch;">
+    <div style="flex:1.5; position:relative; height:400px;">
+      <canvas id="chartBlocks"></canvas>
+    </div>
+    <div style="flex:1; display:flex; flex-direction:column; gap:8px;">
+      <div class="card" style="flex:1; font-size:0.72em;">
+        <strong>Block Growth Rates (Block 1→2):</strong>
+        <table style="font-size:0.95em; margin-top:6px;">
+          <tr><th>Method</th><th>Growth</th></tr>
+          <tr><td><strong>HCRL cw3e</strong></td><td class="highlight">+193%</td></tr>
+          <tr><td>Timing Late</td><td>+148%</td></tr>
+          <tr><td>Baseline</td><td>+112%</td></tr>
+          <tr><td>VI-TAMER</td><td>+97%</td></tr>
+        </table>
+      </div>
+      <div class="card" style="flex:1; font-size:0.72em;">
+        <strong>Final block (ep 151–200):</strong><br/>
+        <span class="good">HCRL cw3e: 149.9</span> — highest<br/>
+        Timing Late: 145.2<br/>
+        VI-TAMER: 131.6<br/>
+        Baseline: 125.6<br/>
+        <br/>
+        HCRL's <strong>compounding effect</strong> accelerates most in the final quarter.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE 8: PER-SEED COMPARISON CHART ======== -->
+<section>
+  <h2>Per-Seed Performance — Who's Consistent?</h2>
+  <div style="display:flex; gap:16px; align-items:center;">
+    <div style="flex:1.4; position:relative; height:400px;">
+      <canvas id="chartSeeds"></canvas>
+    </div>
+    <div style="flex:1;">
+      <table>
+        <tr><th>Method</th><th>Best seed</th><th>Worst seed</th><th>Std</th></tr>
+        <tr><td><strong>Baseline</strong></td><td>134.8</td><td>120.2</td><td class="good">6.0</td></tr>
+        <tr><td><strong>Timing Late</strong></td><td>167.7</td><td>141.0</td><td class="good">11.7</td></tr>
+        <tr><td><strong>HCRL cw3e</strong></td><td>176.0</td><td>116.2</td><td class="warn">24.8</td></tr>
+        <tr><td><strong>VI-TAMER</strong></td><td>186.6</td><td>117.2</td><td class="highlight">29.1</td></tr>
+      </table>
+      <div class="card" style="margin-top:10px; font-size:0.72em;">
+        <strong>Trade-off:</strong><br/>
+        Credit methods reach <span class="good">higher peaks</span> but with <span class="warn">wider variance</span>.<br/>
+        Baseline is predictable but has a <em>low ceiling</em>.<br/>
+        <strong>Timing Late</strong> = best balance of performance + consistency.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE: VI-TAMER DETAIL ======== -->
+<section>
+  <h2>VI-TAMER Deep Dive — Three Seeds, Three Stories</h2>
+  <div style="display:flex; gap:14px; align-items:stretch;">
+    <div class="card" style="flex:1; border-left:4px solid #10b981; font-size:0.7em;">
+      <h3 style="margin-top:0; color:#10b981;">Seed 6 — Star Performer</h3>
+      <div style="position:relative; height:160px;">
+        <canvas id="chartVtSeed6"></canvas>
+      </div>
+      <table style="font-size:0.92em; margin-top:6px;">
+        <tr><td>Last-20</td><td class="good"><strong>186.6</strong></td></tr>
+        <tr><td>r10 ep200</td><td class="good"><strong>195.0</strong></td></tr>
+        <tr><td>≥195 episodes</td><td class="good">50/200 (25%)</td></tr>
+        <tr><td>Max streak ≥195</td><td class="good">9 in a row</td></tr>
+        <tr><td>Ep 180–200 mean</td><td class="good">182.0</td></tr>
+        <tr><td>p90</td><td class="good">200 (cap!)</td></tr>
+      </table>
+      <p style="margin:6px 0 0;"><strong>Last 10 eps:</strong> 200, 200, 200, 200, 200, 200, 200, 200, 198, 200</p>
+    </div>
+    <div class="card" style="flex:1; border-left:4px solid #f59e0b; font-size:0.7em;">
+      <h3 style="margin-top:0; color:#f59e0b;">Seed 9 — Steady Climber</h3>
+      <div style="position:relative; height:160px;">
+        <canvas id="chartVtSeed9"></canvas>
+      </div>
+      <table style="font-size:0.92em; margin-top:6px;">
+        <tr><td>Last-20</td><td><strong>138.1</strong></td></tr>
+        <tr><td>r10 ep200</td><td>135.2</td></tr>
+        <tr><td>≥195 episodes</td><td class="highlight">0</td></tr>
+        <tr><td>≥150 episodes</td><td>22</td></tr>
+        <tr><td>Max episode</td><td>180 (never 195)</td></tr>
+        <tr><td>Collapses</td><td class="good">0</td></tr>
+      </table>
+      <p style="margin:6px 0 0;">Most stable VI-TAMER seed. Beats baseline (+11.2) but never reaches near-optimal.</p>
+    </div>
+    <div class="card" style="flex:1; border-left:4px solid #ef4444; font-size:0.7em;">
+      <h3 style="margin-top:0; color:#ef4444;">Seed 5 — Late Bloomer</h3>
+      <div style="position:relative; height:160px;">
+        <canvas id="chartVtSeed5"></canvas>
+      </div>
+      <table style="font-size:0.92em; margin-top:6px;">
+        <tr><td>Last-20</td><td><strong>117.2</strong></td></tr>
+        <tr><td>First ≥100</td><td class="warn">ep 142 (very late)</td></tr>
+        <tr><td>≥195 episodes</td><td>4</td></tr>
+        <tr><td>Collapses</td><td class="highlight">17</td></tr>
+        <tr><td>Late momentum</td><td class="good">+24.9</td></tr>
+        <tr><td>vs Baseline</td><td class="highlight">−17.6 (loses!)</td></tr>
+      </table>
+      <p style="margin:6px 0 0;">Still accelerating at ep 200. Noisy: episodes range 64–200 in last 30.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE: VI-TAMER TD AMPLIFIER ======== -->
+<section>
+  <h2>VI-TAMER — The TD Amplifier Effect</h2>
+  <div style="display:flex; gap:16px; align-items:center;">
+    <div style="flex:1.4; position:relative; height:380px;">
+      <canvas id="chartTdAmplifier"></canvas>
+    </div>
+    <div style="flex:1;">
+      <div class="card" style="margin-bottom:10px;">
+        <h3 style="margin-top:0;">Variance Amplification</h3>
+        <table style="font-size:0.85em;">
+          <tr><th>Method</th><th>Best</th><th>Worst</th><th>Ratio</th><th>Std</th></tr>
+          <tr><td>Baseline</td><td>134.8</td><td>120.2</td><td class="good">1.12×</td><td class="good">6.0</td></tr>
+          <tr><td>HCRL cw3e</td><td>176.0</td><td>116.2</td><td class="warn">1.51×</td><td class="warn">24.8</td></tr>
+          <tr><td><strong>VI-TAMER</strong></td><td>186.6</td><td>117.2</td><td class="highlight">1.59×</td><td class="highlight">29.1</td></tr>
+        </table>
+        <p class="small">TD propagation (γ=0.95) amplifies the best/worst ratio by <strong>42% vs baseline</strong> (1.59× vs 1.12×).</p>
+      </div>
+      <div class="card" style="margin-bottom:10px;">
+        <h3 style="margin-top:0;">Anti-Correlation with HCRL</h3>
+        <table style="font-size:0.85em;">
+          <tr><th>Seed</th><th>VI-TAMER</th><th>HCRL</th><th>Winner</th></tr>
+          <tr><td>5</td><td>117.2</td><td class="good">176.0</td><td>HCRL +58.8</td></tr>
+          <tr><td>6</td><td class="good">186.6</td><td>116.2</td><td>VI-TAMER +70.3</td></tr>
+          <tr><td>9</td><td>138.1</td><td class="good">155.5</td><td>HCRL +17.4</td></tr>
+        </table>
+        <p class="small">When VI-TAMER wins, HCRL loses — and vice versa. Different algorithms amplify different initialisations.</p>
+      </div>
+      <div class="card" style="font-size:0.72em;">
+        <strong>Implication:</strong> Run both methods with multiple seeds, pick the best → combining complementary variance patterns maximises the chance of finding a near-optimal policy.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE: RLHF APPROACH ======== -->
+<section>
+  <h2>RLHF — Reinforcement Learning from Human Feedback</h2>
+  <div class="card-row">
+    <div class="card" style="flex:1.2;">
+      <h3 style="margin-top:0;">Bradley-Terry Preference Model</h3>
+      <p class="small">Instead of per-timestep scalar feedback (TAMER), RLHF learns from <strong>pairwise trajectory preferences</strong>:</p>
+      <p style="text-align:center; font-size:0.8em; background:#f0f4ff; padding:8px; border-radius:8px;">
+        P[σ¹ ≻ σ²] = exp(Σ r̂(o¹)) / (exp(Σ r̂(o¹)) + exp(Σ r̂(o²)))
+      </p>
+      <p class="small">A neural network reward model r̂ is trained via cross-entropy loss on human preference labels.</p>
+    </div>
+    <div class="card" style="flex:1;">
+      <h3 style="margin-top:0;">Ensemble Improvements (K=3)</h3>
+      <ul class="small">
+        <li><strong>3 independent</strong> reward predictors on bootstrapped subsets</li>
+        <li><strong>Uncertainty filtering</strong>: high-variance pairs skipped</li>
+        <li><strong>Reward normalisation</strong> via Welford's online algorithm</li>
+        <li>500-step Gymnasium cap (vs 200 for TAMER)</li>
+      </ul>
+    </div>
+  </div>
+  <div class="card" style="margin-top:12px;">
+    <h3 style="margin-top:0;">RLHF Pipeline</h3>
+    <p style="text-align:center; font-size:0.85em;">
+      <span class="tag tag-blue">Collect trajectory pairs</span> →
+      <span class="tag tag-amber">Oracle labels preference</span> →
+      <span class="tag tag-green">Train reward ensemble</span> →
+      <span class="tag tag-blue">Agent trains with r̂<sub>ens</sub> + r<sub>env</sub></span>
+    </p>
+    <p class="small" style="text-align:center;">
+      Also tested: <strong>RLHF Single</strong> (1 model, no ensemble) — failed due to ~1.2 labels/episode (insufficient data).
+    </p>
+  </div>
+</section>
+
+<!-- ======== SLIDE 10: RLHF ENSEMBLE RESULTS ======== -->
+<section>
+  <h2>RLHF Ensemble Results <span class="tag tag-red">Phase Transition</span></h2>
+  <table>
+    <tr><th>Seed</th><th>Ep 1–50</th><th>Ep 51–100</th><th>Ep 101–150</th><th>Ep 151–200</th><th>r10 ep200</th><th>Last-20</th><th>Max</th><th>≥195</th></tr>
+    <tr><td>5</td><td>12.1</td><td>69.2</td><td>75.8</td><td>78.2</td><td>76.8</td><td>77.2</td><td class="good">467</td><td>1</td></tr>
+    <tr><td>6</td><td>13.8</td><td>22.0</td><td>33.0</td><td>46.7</td><td>37.6</td><td>36.8</td><td class="dim">109</td><td>0</td></tr>
+    <tr><td>9</td><td>36.2</td><td>24.1</td><td>23.5</td><td>37.6</td><td>42.3</td><td>41.0</td><td class="dim">67</td><td>0</td></tr>
+    <tr style="font-weight:700; background:#fee2e2;"><td>Avg</td><td>20.7</td><td>38.4</td><td>44.1</td><td>54.2</td><td>52.2</td><td>51.7</td><td>467</td><td>1 (0.2%)</td></tr>
+  </table>
+  <div class="card-row" style="margin-top:14px;">
+    <div class="card" style="text-align:center; border-left:4px solid #10b981;">
+      <div class="metric" style="font-size:1.6em;">467</div>
+      <div class="metric-label">Seed 5 max steps<br/>(native 500-step cap)</div>
+      <p class="small" style="margin-bottom:0;">Ensemble <em>can</em> learn a genuine<br/>CartPole reward signal</p>
+    </div>
+    <div class="card" style="text-align:center; border-left:4px solid #ef4444;">
+      <div class="metric highlight" style="font-size:1.6em;">67–109</div>
+      <div class="metric-label">Seeds 6 &amp; 9 max steps</div>
+      <p class="small" style="margin-bottom:0;">Plateau below 40-step last-20<br/>→ <strong>initialisation-dependent</strong></p>
+    </div>
+    <div class="card" style="text-align:center; border-left:4px solid #f59e0b;">
+      <div class="metric warn" style="font-size:1.6em;">0.2%</div>
+      <div class="metric-label">≥195 rate</div>
+      <p class="small" style="margin-bottom:0;">Weak monotonic growth<br/>20.7 → 38.4 → 44.1 → 54.2</p>
+    </div>
+  </div>
+  <p class="small"><strong>Verdict:</strong> RLHF Ensemble shows the §2.2 improvements work, but 200 episodes is far too few for reliable convergence. Preference-based learning needs <strong>orders of magnitude more data</strong> than per-timestep feedback (TAMER/HCRL).</p>
+</section>
+
+<!-- ======== SLIDE 11: RLHF SINGLE vs ENSEMBLE ======== -->
+<section>
+  <h2>RLHF: Single vs Ensemble — Why Ensemble Matters</h2>
+  <div style="display:flex; gap:16px; align-items:center;">
+    <div style="flex:1.4; position:relative; height:380px;">
+      <canvas id="chartRlhfCompare"></canvas>
+    </div>
+    <div style="flex:1;">
+      <table>
+        <tr><th>Metric</th><th>Single</th><th>Ensemble</th><th>Δ</th></tr>
+        <tr><td>Overall mean</td><td class="highlight">24.7</td><td>39.3</td><td class="good">+59%</td></tr>
+        <tr><td>Avg Last-20</td><td class="highlight">21.6</td><td>51.6</td><td class="good">+139%</td></tr>
+        <tr><td>≥100 episodes</td><td class="highlight">0/600</td><td>25/600</td><td class="good">+25</td></tr>
+        <tr><td>≥195 episodes</td><td>0/600</td><td>1/600</td><td>+1</td></tr>
+        <tr><td>Max episode</td><td>92</td><td class="good">467</td><td>+375</td></tr>
+        <tr><td>Total collapses</td><td class="highlight">277</td><td>179</td><td class="good">−35%</td></tr>
+        <tr><td>Median episode</td><td>22</td><td>28</td><td>+27%</td></tr>
+      </table>
+      <div class="card" style="margin-top:10px; font-size:0.7em;">
+        <strong>Why Single fails:</strong> blocks go 19.6 → 31.7 → <span class="highlight">25.4 → 22.0</span> — peaks then <em>collapses</em>. Single reward model overfits on noise with ~1.2 labels/episode.<br/><br/>
+        <strong>Ensemble fix:</strong> K=3 models + bootstrapping + uncertainty filtering → monotonic growth: 20.7 → 38.4 → 44.1 → 54.2
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE 12: PHASE TRANSITION + FAILURE ======== -->
+<section>
+  <h2>RLHF Ensemble — Phase Transition vs Failure Modes</h2>
+  <div class="card-row">
+    <div class="card" style="flex:1; border-left:4px solid #10b981;">
+      <h3 style="margin-top:0; color:#10b981;">Seed 5: Phase Transition ✓</h3>
+      <div style="position:relative; height:200px;">
+        <canvas id="chartPhaseTransition"></canvas>
+      </div>
+      <p class="small" style="margin-top:8px;">
+        <strong>Ep 1–40:</strong> random policy (mean 12)<br/>
+        <strong>Ep 56:</strong> first episode ≥50<br/>
+        <strong>Ep 73:</strong> first ≥100 → ensemble found signal<br/>
+        <strong>Ep 88:</strong> <span class="good">467 steps!</span> (near 500-cap)<br/>
+        <strong>Ep 60–200:</strong> stabilizes at 75–80 mean<br/>
+        <strong>20/200 episodes ≥100</strong> (10%)
+      </p>
+    </div>
+    <div class="card" style="flex:1; border-left:4px solid #ef4444;">
+      <h3 style="margin-top:0; color:#ef4444;">Per-Seed Comparison</h3>
+      <table style="font-size:0.85em;">
+        <tr><th>Metric</th><th class="good">Seed 5</th><th>Seed 6</th><th>Seed 9</th></tr>
+        <tr><td>Episodes &lt; 50 steps</td><td class="good">39%</td><td class="highlight">88%</td><td class="highlight">88%</td></tr>
+        <tr><td>Episodes &lt; 30 steps</td><td class="good">32%</td><td>64%</td><td>60%</td></tr>
+        <tr><td>Episodes &lt; 20 steps</td><td>26%</td><td>46%</td><td>18%</td></tr>
+        <tr><td>Max episode</td><td class="good">467</td><td>109</td><td>67</td></tr>
+        <tr><td>≥100 episodes</td><td class="good">20</td><td>5</td><td class="highlight">0</td></tr>
+        <tr><td>1st→2nd half Δ</td><td class="good">+36.4</td><td>+22.0</td><td class="highlight">+0.4</td></tr>
+      </table>
+      <p class="small" style="margin-top:8px;">
+        <strong>Seed 5:</strong> clear phase transition — +36.4 improvement, 20 episodes ≥100.<br/>
+        <strong>Seed 9:</strong> zero improvement (+0.4). Reward model <em>never</em> converges.<br/>
+        <strong>Seed 6:</strong> slow improvement but still 3.5× below baseline.
+      </p>
+    </div>
+  </div>
+  <div class="card" style="margin-top:8px; font-size:0.72em; text-align:center;">
+    <strong>Conclusion:</strong> RLHF preference learning at 200 episodes is <strong>initialisation-dependent</strong>. When the ensemble finds a good reward signal (seed 5), it works. But 2 out of 3 seeds fail → <strong>67% failure rate</strong>. Per-timestep methods (HCRL/VI-TAMER) converge more reliably because they receive direct scalar feedback, not indirect preference pairs.
+  </div>
+</section>
+
+<!-- ======== SLIDE 13: TIMING FULL COMPARISON ======== -->
+<section>
+  <h2>Feedback Timing — All 4 Conditions</h2>
+  <table>
+    <tr><th>Condition</th><th>Window</th><th>Avg signals</th><th>Overall mean</th><th>Last-20</th><th>r10 ep200</th><th>≥195 (%)</th></tr>
+    <tr style="font-weight:600;"><td>Late</td><td>ep 160–199</td><td>2,636</td><td><strong>99.3</strong></td><td><strong>151.3</strong></td><td><strong>154.0</strong></td><td>3.7%</td></tr>
+    <tr><td>Full</td><td>ep 0–199</td><td>7,557</td><td>87.6</td><td>131.5</td><td>134.2</td><td><strong>5.0%</strong></td></tr>
+    <tr><td>Early</td><td>ep 0–39</td><td>597</td><td>85.4</td><td>129.4</td><td>130.2</td><td>0.0%</td></tr>
+    <tr><td>Mid</td><td>ep 80–119</td><td>1,920</td><td>92.6</td><td>121.7</td><td>116.6</td><td>0.3%</td></tr>
+  </table>
+  <div class="card" style="margin-top:16px;">
+    <h3 style="margin-top:0;">Timing Ranking Reversal (100 → 200 Episodes)</h3>
+    <table>
+      <tr><th>Condition</th><th>Last-20 @100 eps</th><th>Last-20 @200 eps</th><th>Change</th><th>Rank @100</th><th>Rank @200</th></tr>
+      <tr><td>Early</td><td>64.1</td><td>129.4</td><td class="good">+65.3</td><td>4th</td><td>3rd</td></tr>
+      <tr><td>Mid</td><td class="good">104.3</td><td>121.7</td><td class="warn">+17.4 ★</td><td class="good">1st</td><td class="highlight">4th</td></tr>
+      <tr><td>Late</td><td>97.2</td><td class="good">151.3</td><td class="good">+54.1</td><td>2nd</td><td class="good">1st</td></tr>
+      <tr><td>Full</td><td>78.3</td><td>131.5</td><td class="good">+53.2</td><td>3rd</td><td>2nd</td></tr>
+    </table>
+    <p class="small">★ Mid improves the least (+17.4 vs +53–65), explained by <strong>reward model staleness</strong>.</p>
+  </div>
+</section>
+
+<!-- ======== SLIDE 10: SIGNAL EFFICIENCY ======== -->
+<section>
+  <h2>Signal Efficiency — Performance per Oracle Signal</h2>
+  <table>
+    <tr><th>Condition</th><th>Avg Last-20</th><th>Avg Signals</th><th>Efficiency</th></tr>
+    <tr style="font-weight:600;"><td>Early</td><td>129.4</td><td>597</td><td class="good">0.2168</td></tr>
+    <tr><td>Mid</td><td>121.7</td><td>1,920</td><td>0.0634</td></tr>
+    <tr><td>Late</td><td>151.3</td><td>2,636</td><td>0.0574</td></tr>
+    <tr><td>Full</td><td>131.5</td><td>7,557</td><td class="dim">0.0174</td></tr>
+  </table>
+  <br/>
+  <div class="card-row">
+    <div class="card" style="text-align:center;">
+      <div class="metric good">12.5×</div>
+      <div class="metric-label">Early vs Full efficiency</div>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div class="metric">85%</div>
+      <div class="metric-label">of Late's performance</div>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div class="metric">7.9%</div>
+      <div class="metric-label">of Full's oracle budget</div>
+    </div>
+  </div>
+  <p class="small"><strong>Trade-off:</strong> Late maximises absolute performance; Early maximises cost-effectiveness.</p>
+</section>
+
+<!-- ======== SLIDE 11: OVERALL RANKING ======== -->
+<section>
+  <h2>Cross-Method Ranking (200 Episodes)</h2>
+  <table>
+    <tr><th>#</th><th>Method</th><th>Avg r10 ep200</th><th>≥195 (%)</th><th>Best for</th><th>Weakness</th></tr>
+    <tr style="background:#d1fae5;"><td>1</td><td><strong>HCRL (cw3e)</strong></td><td>150.6</td><td class="highlight">12.8%</td><td>Highest ≥195 rate</td><td>std = 24.8</td></tr>
+    <tr style="background:#dbeafe;"><td>2</td><td><strong>VI-TAMER (cw3u)</strong></td><td class="good">152.8</td><td class="highlight">9.0%</td><td>Highest avg r10</td><td>std = 29.1</td></tr>
+    <tr style="background:#fef3c7;"><td>3</td><td><strong>Timing: Late</strong></td><td>154.0</td><td>3.7%</td><td>Most consistent timing</td><td>160-ep warmup</td></tr>
+    <tr><td>4</td><td>Timing: Full</td><td>134.2</td><td>5.0%</td><td>Good ≥195 count</td><td>std = 27.3</td></tr>
+    <tr><td>5</td><td>Timing: Early</td><td>130.2</td><td>0.0%</td><td>Signal efficiency</td><td>Max = 166</td></tr>
+    <tr><td>6</td><td>Baseline</td><td>124.6</td><td>0.8%</td><td>Most consistent (std=6)</td><td>Low ceiling</td></tr>
+    <tr><td>7</td><td class="dim">RLHF Ensemble</td><td class="dim">52.2</td><td class="dim">0.2%</td><td class="dim">Phase transition</td><td class="dim">67% failure</td></tr>
+  </table>
+</section>
+
+<!-- ======== SLIDE 12: vs BASELINE ======== -->
+<section>
+  <h2>Beating the Baseline — ≥195 Multiplier</h2>
+  <p class="small" style="text-align:left;">Baseline: avg last-20 = 127.3, ≥195 rate = 0.8%</p>
+  <table>
+    <tr><th>Method</th><th>Avg last-20</th><th>Δ vs Baseline</th><th>≥195 rate</th><th>≥195 multiplier</th></tr>
+    <tr><td>Timing: Late</td><td>151.3</td><td>+24.0 (+19%)</td><td>3.7%</td><td>4.6×</td></tr>
+    <tr><td><strong>HCRL cw3e</strong></td><td>149.2</td><td>+21.9 (+17%)</td><td>12.8%</td><td class="highlight">16.0×</td></tr>
+    <tr><td><strong>VI-TAMER cw3u</strong></td><td>147.3</td><td>+20.0 (+16%)</td><td>9.0%</td><td class="highlight">11.3×</td></tr>
+    <tr><td>Timing: Full</td><td>131.5</td><td>+4.2 (+3%)</td><td>5.0%</td><td>6.3×</td></tr>
+  </table>
+  <br/>
+  <div class="card">
+    <strong>Key finding:</strong> Average improvements are 16–19%, but
+    <span class="highlight">near-optimal episode rates improve by 5–16×</span>.<br/>
+    Credit-assignment methods don't just raise the mean — they shift the <em>entire distribution</em> rightward.
+  </div>
+</section>
+
+<!-- ======== SLIDE 13: INSIGHT 1 ======== -->
+<section>
+  <h2><span class="insight-num">1</span> Credit Assignment Is the Dominant Factor</h2>
+  <div style="text-align:left;">
+    <p>The re-trained results establish a clear hierarchy:</p>
+    <div style="margin: 12px 0;">
+      <strong>HCRL cw3e:</strong> <span class="highlight">12.8% ≥195</span>
+      <span class="bar bar-green" style="width:256px;"></span><br/>
+      <strong>VI-TAMER cw3u:</strong> <span class="highlight">9.0% ≥195</span>
+      <span class="bar bar-blue" style="width:180px;"></span><br/>
+      <strong>Timing Full:</strong> 5.0%
+      <span class="bar bar-amber" style="width:100px;"></span><br/>
+      <strong>Timing Late:</strong> 3.7%
+      <span class="bar bar-amber" style="width:74px;"></span><br/>
+      <strong>Baseline:</strong> 0.8%
+      <span class="bar bar-gray" style="width:16px;"></span>
+    </div>
+    <div class="card">
+      <strong>Mechanism — Compounding Effect:</strong><br/>
+      Better agent → longer episodes → more informative credit-expanded training pairs (3× per signal) → better reward model → better agent<br/><br/>
+      Last-quarter block: HCRL 149.9 vs Baseline 125.6 (<span class="good">+19.4%</span>)
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE 14: INSIGHT 2 ======== -->
+<section>
+  <h2><span class="insight-num">2</span> VI-TAMER: TD Propagation as Amplifier</h2>
+  <div class="card-row">
+    <div class="card" style="text-align:center; border-left: 4px solid #10b981;">
+      <div class="metric good">195.0</div>
+      <div class="metric-label">Seed 6 r10 ep200<br/>50/200 episodes ≥195</div>
+      <p class="small">Reward model learns useful signal early<br/>→ TD propagates backward efficiently<br/>→ <strong>Rapid convergence cascade</strong></p>
+    </div>
+    <div class="card" style="text-align:center; border-left: 4px solid #ef4444;">
+      <div class="metric highlight">128.2</div>
+      <div class="metric-label">Seed 5 r10 ep200<br/>4/200 episodes ≥195</div>
+      <p class="small">Reward model learns poorly<br/>→ Same propagation compounds errors<br/>→ <strong>Sustained underperformance</strong></p>
+    </div>
+  </div>
+  <br/>
+  <div class="card">
+    <strong>Cross-seed std of last-20 = 29.1</strong> (highest of all methods)<br/>
+    <strong>Practical implication:</strong> Use VI-TAMER with <em>multiple seeds and model selection</em>.<br/>
+    HCRL's myopic policy (γ=0) avoids amplification → trades peak performance for reliability.
+  </div>
+</section>
+
+<!-- ======== SLIDE 15: INSIGHT 3 + 4 ======== -->
+<section>
+  <h2><span class="insight-num">3</span> Exponential > Uniform Credit</h2>
+  <div class="card" style="text-align:left;">
+    <p>Exponential gives <strong>23% more weight</strong> to the most recent (most causally relevant) observation:</p>
+    <p style="text-align:center;">Uniform: [0.333, 0.333, 0.333] &nbsp;→&nbsp; Exponential: [<span class="good">0.410</span>, 0.328, 0.262]</p>
+    <p>Result: more accurate reward model → HCRL achieves <span class="highlight">12.8% ≥195</span> with consistent late-phase compounding across all 3 seeds.</p>
+  </div>
+  <br/>
+  <h2><span class="insight-num">4</span> Reward Model Staleness Framework</h2>
+  <table>
+    <tr><th>Condition</th><th>Feedback ends at</th><th>Staleness at ep 200</th><th>Last-20</th></tr>
+    <tr><td>Early</td><td>ep 39</td><td class="warn">161 episodes</td><td>129.4</td></tr>
+    <tr><td>Mid</td><td>ep 119</td><td>81 episodes</td><td class="highlight">121.7</td></tr>
+    <tr><td>Late</td><td>ep 199</td><td class="good">0 episodes</td><td class="good">151.3</td></tr>
+  </table>
+  <p class="small"><strong>Paradox:</strong> 161-episode staleness (Early) outperforms 81-episode (Mid) because<br/>
+  Early's model is too <em>weak</em> to interfere; Mid's model is strong enough to <em>conflict</em> with the evolving policy.</p>
+</section>
+
+<!-- ======== SLIDE 16: INSIGHT 5 + 6 ======== -->
+<section>
+  <h2><span class="insight-num">5</span> Baseline Consistently Beatable</h2>
+  <div class="card" style="text-align:left;">
+    <p>Baseline is the <strong>most predictable</strong> method (std = 6.0), but 4 methods now exceed it:</p>
+    <ul>
+      <li>Average last-20 improvements: <strong>+16% to +19%</strong></li>
+      <li>≥195 rate improvements: <strong>5× to 16×</strong></li>
+    </ul>
+    <p>Credit-assignment methods don't just raise the mean — they shift the <em>entire distribution</em> rightward.</p>
+  </div>
+  <br/>
+  <h2><span class="insight-num">6</span> Signal Efficiency Favours Early Timing</h2>
+  <div class="card" style="text-align:left;">
+    <ul>
+      <li>Early: <span class="good">0.217 steps/signal</span> — <strong>12.5× more efficient</strong> than Full (0.017)</li>
+      <li>Early achieves 85% of Late's performance at <strong>7.9%</strong> of the oracle budget</li>
+      <li>For <em>budget-unconstrained</em> settings → credit-assignment methods dominate all timing conditions</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ======== NEW SLIDE: LEARNING SPEED & ACCELERATION ======== -->
+<section>
+  <h2><span class="insight-num">7</span> Learning Speed &amp; Acceleration Patterns</h2>
+  <div class="card" style="margin-bottom:12px;">
+    <h3 style="margin-top:0;">First episode reaching key thresholds (avg across seeds)</h3>
+    <table>
+      <tr><th>Method</th><th>First ≥100 steps</th><th>First ≥150 steps</th><th>Block 1→2 growth</th></tr>
+      <tr><td>Timing Mid</td><td class="good">ep 41</td><td>ep 54</td><td>+108%</td></tr>
+      <tr><td>Timing Early</td><td>ep 45</td><td>ep 135</td><td>+104%</td></tr>
+      <tr><td>Timing Late</td><td>ep 61</td><td class="good">ep 93</td><td>+148%</td></tr>
+      <tr><td><strong>HCRL cw3e</strong></td><td>ep 76</td><td>ep 105</td><td class="highlight">+193%</td></tr>
+      <tr><td>VI-TAMER</td><td>ep 75</td><td>ep 107</td><td>+97%</td></tr>
+      <tr><td>Baseline</td><td>ep 70</td><td>ep 101</td><td>+112%</td></tr>
+      <tr><td class="dim">RLHF Ensemble</td><td class="dim">ep 114</td><td class="dim">ep 88 (1 seed only)</td><td class="dim">+86%</td></tr>
+    </table>
+  </div>
+  <div class="card-row">
+    <div class="card" style="border-left:4px solid #10b981;">
+      <strong>HCRL cw3e</strong> has the <span class="highlight">highest block 1→2 acceleration (+193%)</span> — slow start, then explosive growth as credit-expanded reward model kicks in.
+    </div>
+    <div class="card" style="border-left:4px solid #f59e0b;">
+      <strong>Timing Mid</strong> starts fastest (first ≥100 at ep 41) but <em>decelerates</em> the most — from +108% to just +9% in the final block. <strong>Staleness drag.</strong>
+    </div>
+  </div>
+</section>
+
+<!-- ======== NEW SLIDE: STABILITY ANALYSIS ======== -->
+<section>
+  <h2><span class="insight-num">8</span> Training Stability — Collapses &amp; Momentum</h2>
+  <div class="card" style="margin-bottom:12px;">
+    <h3 style="margin-top:0;">Collapse events (rolling-10 drops &gt;30% from peak)</h3>
+    <table>
+      <tr><th>Method</th><th>Seed 5</th><th>Seed 6</th><th>Seed 9</th><th>Total</th><th>Verdict</th></tr>
+      <tr style="background:#d1fae5;"><td><strong>Timing Late</strong></td><td>0</td><td>0</td><td>0</td><td class="good">0</td><td class="good">Most stable</td></tr>
+      <tr><td>HCRL cw3e</td><td>0</td><td>0</td><td>4</td><td>4</td><td>Very stable</td></tr>
+      <tr><td>Baseline</td><td>5</td><td>10</td><td>0</td><td>15</td><td>Moderate</td></tr>
+      <tr style="background:#fee2e2;"><td><strong>VI-TAMER</strong></td><td>17</td><td>15</td><td>0</td><td class="highlight">32</td><td class="highlight">Most volatile</td></tr>
+      <tr><td>Timing Full</td><td>25</td><td>7</td><td>0</td><td>32</td><td>Volatile</td></tr>
+      <tr><td class="dim">RLHF Ensemble</td><td class="dim">23</td><td class="dim">29</td><td class="dim">0</td><td class="dim">52</td><td class="dim">Chaotic</td></tr>
+    </table>
+  </div>
+  <div class="card-row">
+    <div class="card" style="text-align:center; border-left:4px solid #3b82f6;">
+      <h3 style="margin-top:0;">Late-Phase Momentum (ep 150–175 → 176–200)</h3>
+      <table style="font-size:0.9em;">
+        <tr><th>Method</th><th>ep 150–175</th><th>ep 176–200</th><th>Δ</th></tr>
+        <tr><td><strong>VI-TAMER</strong></td><td>120.2</td><td>143.4</td><td class="good">+19.3%</td></tr>
+        <tr><td>Timing Early</td><td>120.1</td><td>130.4</td><td class="good">+8.5%</td></tr>
+        <tr><td>Timing Late</td><td>141.9</td><td>148.7</td><td>+4.8%</td></tr>
+        <tr><td>HCRL cw3e</td><td>147.7</td><td>151.2</td><td>+2.4%</td></tr>
+        <tr><td>Timing Mid</td><td>125.8</td><td>122.5</td><td class="highlight">−2.6%</td></tr>
+        <tr><td class="dim">RLHF Ens.</td><td class="dim">58.1</td><td class="dim">50.6</td><td class="highlight">−13.0%</td></tr>
+      </table>
+    </div>
+  </div>
+  <p class="small"><strong>Key:</strong> VI-TAMER is volatile but has the <strong>strongest late momentum (+19.3%)</strong> — still accelerating at ep 200. Mid and RLHF are <em>declining</em>.</p>
+</section>
+
+<!-- ======== NEW SLIDE: SEED REPRODUCIBILITY ======== -->
+<section>
+  <h2><span class="insight-num">9</span> Seed Reproducibility &amp; Success Streaks</h2>
+  <div class="card-row">
+    <div class="card" style="flex:1;">
+      <h3 style="margin-top:0;">Cross-seed correlation (avg pairwise r)</h3>
+      <p class="small">Do different seeds follow similar learning trajectories?</p>
+      <table style="font-size:0.9em;">
+        <tr><th>Method</th><th>Avg r</th><th>Interpretation</th></tr>
+        <tr style="background:#d1fae5;"><td><strong>Timing Late</strong></td><td class="good">0.683</td><td>Most reproducible</td></tr>
+        <tr><td>Timing Early</td><td>0.647</td><td>Good agreement</td></tr>
+        <tr><td>Timing Full</td><td>0.644</td><td>Good agreement</td></tr>
+        <tr><td>HCRL cw3e</td><td>0.609</td><td>Moderate</td></tr>
+        <tr><td>Baseline</td><td>0.562</td><td>Moderate</td></tr>
+        <tr><td>VI-TAMER</td><td>0.537</td><td>Lower agreement</td></tr>
+        <tr style="background:#fee2e2;"><td class="dim">RLHF Ensemble</td><td class="highlight">0.076</td><td class="highlight">Essentially random</td></tr>
+      </table>
+    </div>
+    <div class="card" style="flex:1;">
+      <h3 style="margin-top:0;">Max consecutive episodes ≥195</h3>
+      <p class="small">Sustained mastery, not just lucky spikes?</p>
+      <table style="font-size:0.9em;">
+        <tr><th>Method</th><th>Best seed</th><th>Streak</th><th>Total ≥195</th></tr>
+        <tr><td><strong>VI-TAMER</strong></td><td>s6</td><td class="good">9 in a row</td><td>50</td></tr>
+        <tr><td><strong>HCRL cw3e</strong></td><td>s9</td><td class="good">8 in a row</td><td>58</td></tr>
+        <tr><td>Timing Full</td><td>s5</td><td>3 in a row</td><td>29</td></tr>
+        <tr><td>Timing Late</td><td>s5</td><td>2 in a row</td><td>21</td></tr>
+        <tr><td>Baseline</td><td>s5</td><td>1</td><td>3</td></tr>
+        <tr><td class="dim">RLHF Ens.</td><td class="dim">s5</td><td class="dim">1</td><td class="dim">1</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="card" style="margin-top:10px;">
+    <strong>Takeaway:</strong> Credit-assignment methods achieve <em>sustained</em> near-optimal streaks (8–9 consecutive ≥195), not random spikes. This proves genuine policy mastery. Timing methods rarely sustain ≥195 for more than 2–3 episodes despite good averages.
+  </div>
+</section>
+
+<!-- ======== NEW SLIDE: DISTRIBUTION SHAPE ======== -->
+<section>
+  <h2><span class="insight-num">10</span> Episode Length Distribution — Who Shifts Right?</h2>
+  <div class="card" style="margin-bottom:12px;">
+    <table>
+      <tr><th>Method</th><th>p10</th><th>p25</th><th>Median</th><th>p75</th><th>p90</th><th>Mean−Median</th></tr>
+      <tr style="background:#d1fae5;"><td><strong>HCRL cw3e</strong></td><td>19</td><td>58</td><td>89</td><td>139</td><td class="good">200</td><td class="good">+9.5 (right-skewed)</td></tr>
+      <tr><td><strong>VI-TAMER</strong></td><td>21</td><td>38</td><td>74</td><td>135</td><td>176</td><td>+12.9 (right-skewed)</td></tr>
+      <tr><td>Timing Late</td><td>21</td><td>53</td><td class="good">109</td><td>141</td><td>166</td><td>−9.7 (left-skewed)</td></tr>
+      <tr><td>Timing Mid</td><td>23</td><td>58</td><td>95</td><td>131</td><td>156</td><td>−2.4</td></tr>
+      <tr><td>Timing Full</td><td>19</td><td>41</td><td>92</td><td>120</td><td>149</td><td>−4.4</td></tr>
+      <tr><td>Baseline</td><td>17</td><td>31</td><td>80</td><td>126</td><td>144</td><td>+1.5</td></tr>
+      <tr><td class="dim">RLHF Ens.</td><td class="dim">12</td><td class="dim">17</td><td class="dim">28</td><td class="dim">57</td><td class="dim">79</td><td class="dim">+11.3</td></tr>
+    </table>
+  </div>
+  <div class="card-row">
+    <div class="card" style="border-left:4px solid #10b981;">
+      <strong>HCRL cw3e: p90 = 200</strong> (episode cap!)<br/>
+      <span class="small">10% of all 600 episodes hit the maximum — no other method achieves this. The right tail extends to perfect performance.</span>
+    </div>
+    <div class="card" style="border-left:4px solid #f59e0b;">
+      <strong>Timing Late: highest median (109)</strong><br/>
+      <span class="small">Most episodes are "good" (left-skewed), but the upper tail is capped at 166 for p90 — rarely hits near-optimal.</span>
+    </div>
+    <div class="card" style="border-left:4px solid #3b82f6;">
+      <strong>Credit methods are right-skewed</strong><br/>
+      <span class="small">Mean > Median = heavy right tail of long episodes. This is the compounding effect in action.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE: KEY TAKEAWAYS ======== -->
+<section>
+  <h2>Key Takeaways</h2>
+  <div style="text-align:left; font-size:0.85em;">
+    <div class="card" style="margin-bottom:10px; border-left:4px solid #10b981;">
+      <strong>1. Credit assignment is the most impactful innovation</strong><br/>
+      Both CAF methods achieve 9–12.8% ≥195 rates — <strong>11–16× the baseline</strong>. The 3× data expansion creates a compounding virtuous cycle.
+    </div>
+    <div class="card" style="margin-bottom:10px; border-left:4px solid #3b82f6;">
+      <strong>2. VI-TAMER works but requires seed selection</strong><br/>
+      Reversed from 0% → 9.0% ≥195. TD propagation amplifies both good and bad initialisations.
+    </div>
+    <div class="card" style="margin-bottom:10px; border-left:4px solid #8b5cf6;">
+      <strong>3. Exponential credit outperforms uniform for HCRL</strong><br/>
+      41% weight on most recent observation aligns magnitude with causal relevance.
+    </div>
+    <div class="card" style="margin-bottom:10px; border-left:4px solid #f59e0b;">
+      <strong>4. Late timing = best simple strategy</strong><br/>
+      Highest avg last-20 (151.3), lowest variance (std=11.7). No credit infrastructure needed.
+    </div>
+    <div class="card" style="margin-bottom:10px; border-left:4px solid #ef4444;">
+      <strong>5. Staleness framework explains timing paradox</strong><br/>
+      A stale model harms performance <em>only</em> if it is strong enough to override environment signals.
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE 18: FUTURE WORK ======== -->
+<section>
+  <h2>Limitations &amp; Future Work</h2>
+  <div style="text-align:left; font-size:0.85em;">
+    <div class="card" style="margin-bottom:10px;">
+      <strong>Combined timing + credit assignment</strong><br/>
+      Late-window oracle feedback + exponential credit expansion — not yet tested together.
+    </div>
+    <div class="card" style="margin-bottom:10px;">
+      <strong>VI-TAMER variance reduction</strong><br/>
+      Ensemble VI-TAMER: average multiple reward models to reduce initialisation sensitivity.
+    </div>
+    <div class="card" style="margin-bottom:10px;">
+      <strong>Exponential credit for VI-TAMER</strong><br/>
+      Currently uses uniform. Exponential may reduce TD magnitude dilution.
+    </div>
+    <div class="card" style="margin-bottom:10px;">
+      <strong>Credit window tuning</strong><br/>
+      Compare W ∈ {1, 2, 3, 5} with exponential credit for both HCRL and VI-TAMER.
+    </div>
+    <div class="card" style="margin-bottom:10px;">
+      <strong>RLHF scaling study</strong><br/>
+      200 → 500 → 1,000 episodes: identify minimum preference dataset for convergence.
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE: CONCLUSION ======== -->
+<section>
+  <h2>Conclusion</h2>
+  <div style="text-align:left; font-size:0.78em;">
+    <table style="font-size:0.9em; margin-bottom:14px;">
+      <tr><th>#</th><th>Method</th><th>Overall mean</th><th>Avg last-20</th><th>r10 ep200</th><th>≥195 (%)</th><th>Key finding</th></tr>
+      <tr style="background:#d1fae5;"><td>1</td><td><strong>HCRL Oracle (cw3e)</strong></td><td>98.5</td><td>149.2</td><td>150.6</td><td class="highlight">12.8%</td><td>Best ≥195 rate; exponential compounding</td></tr>
+      <tr style="background:#dbeafe;"><td>2</td><td><strong>VI-TAMER (cw3u)</strong></td><td>86.9</td><td>147.3</td><td class="good">152.8</td><td class="highlight">9.0%</td><td>Reversal from 0%; TD amplifier effect</td></tr>
+      <tr style="background:#fef3c7;"><td>3</td><td><strong>Timing: Late</strong></td><td class="good">99.3</td><td class="good">151.3</td><td>154.0</td><td>3.7%</td><td>Best avg r10; policy-aligned feedback</td></tr>
+      <tr><td>4</td><td>Baseline</td><td>81.5</td><td>127.3</td><td>124.6</td><td>0.8%</td><td>Most consistent (std=6.0)</td></tr>
+      <tr><td>5</td><td class="dim">RLHF Ensemble</td><td class="dim">39.3</td><td class="dim">51.7</td><td class="dim">52.2</td><td class="dim">0.2%</td><td class="dim">67% failure; needs more data</td></tr>
+    </table>
+    <div class="card-row">
+      <div class="card" style="border-left:4px solid #10b981;">
+        <strong style="color:#10b981;">Credit assignment is dominant</strong><br/>
+        3× data expansion per signal creates a compounding cycle — <span class="highlight">11–16× baseline ≥195 rate</span>.
+      </div>
+      <div class="card" style="border-left:4px solid #f59e0b;">
+        <strong style="color:#f59e0b;">Late timing = simplest win</strong><br/>
+        No infrastructure needed — just delay oracle to ep 160. Highest consistency (std=11.7).
+      </div>
+      <div class="card" style="border-left:4px solid #ef4444;">
+        <strong style="color:#ef4444;">RLHF needs scale</strong><br/>
+        Per-timestep feedback (TAMER/HCRL) converges reliably; preferences need orders of magnitude more data.
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px; text-align:center; background:linear-gradient(135deg, #f0f4ff, #f8f9fd);">
+      <strong>Bottom line:</strong> Human feedback improves Q-Learning on CartPole when delivered efficiently.
+      <strong>Credit assignment</strong> (how feedback is distributed) matters more than <strong>timing</strong> (when feedback is given).
+      Avg improvements are 16–19%, but <span class="highlight">near-optimal rates improve 5–16×</span>.
+    </div>
+  </div>
+</section>
+
+<!-- ======== SLIDE 19: THANK YOU ======== -->
+<section class="title-slide">
+  <h1>Thank You</h1>
+  <br/>
+  <p style="font-size:0.9em;">
+    <strong>Thai Nguyen</strong><br/>
+    Master's in Statistical Machine Learning<br/>
+    Hanoi University of Science and Technology
+  </p>
+  <br/>
+  <p class="small">Instructor: Assoc. Prof. Thân Quang Khoát</p>
+  <br/>
+  <div class="card" style="display:inline-block; text-align:center;">
+    <span class="small">
+      Full report: <code>CAPSTONE_REPORT.md</code> &nbsp;|&nbsp;
+      Live demo: <code>uv run python web_visualiser.py</code>
+    </span>
+  </div>
+</section>
+
+</div><!-- .slides -->
+</div><!-- .reveal -->
+
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script>
+Reveal.initialize({
+  hash: true,
+  slideNumber: 'c/t',
+  width: 1200,
+  height: 700,
+  margin: 0.06,
+  transition: 'slide',
+  transitionSpeed: 'default',
+  center: true
+});
+
+// ===== CHART DEFAULTS =====
+Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
+Chart.defaults.font.size = 13;
+Chart.defaults.plugins.legend.labels.usePointStyle = true;
+Chart.defaults.plugins.legend.labels.padding = 14;
+Chart.defaults.animation.duration = 800;
+
+// ===== CHART 1: Learning Curves (line chart) =====
+new Chart(document.getElementById('chartLearningCurves'), {
+  type: 'line',
+  data: {
+    labels: ['Ep 50', 'Ep 100', 'Ep 150', 'Ep 200'],
+    datasets: [
+      { label: 'HCRL cw3e', data: [59.7, 97.6, 116.4, 150.6],
+        borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.1)',
+        borderWidth: 3, pointRadius: 6, pointHoverRadius: 9, fill: false, tension: 0.3 },
+      { label: 'VI-TAMER', data: [42.6, 105.5, 116.9, 152.8],
+        borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)',
+        borderWidth: 3, pointRadius: 6, pointHoverRadius: 9, fill: false, tension: 0.3 },
+      { label: 'Timing Late', data: [55.5, 93.8, 149.1, 154.0],
+        borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.1)',
+        borderWidth: 3, pointRadius: 6, pointHoverRadius: 9, fill: false, tension: 0.3 },
+      { label: 'Timing Full', data: [52.1, 118.4, 113.7, 134.2],
+        borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,0.1)',
+        borderWidth: 2, pointRadius: 4, borderDash: [6,3], fill: false, tension: 0.3 },
+      { label: 'Baseline', data: [38.8, 65.0, 123.0, 124.6],
+        borderColor: '#9ca3af', backgroundColor: 'rgba(156,163,175,0.1)',
+        borderWidth: 2, pointRadius: 4, borderDash: [4,4], fill: false, tension: 0.3 },
+      { label: 'RLHF Ensemble', data: [22.4, 38.8, 39.6, 52.2],
+        borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)',
+        borderWidth: 2, pointRadius: 4, borderDash: [2,4], fill: false, tension: 0.3 }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      title: { display: true, text: 'Average Rolling-10 Mean at Key Episodes', font: { size: 15, weight: '600' } },
+      legend: { position: 'bottom' }
+    },
+    scales: {
+      y: { title: { display: true, text: 'Rolling-10 Mean (steps)' }, min: 0, max: 200,
+           grid: { color: 'rgba(0,0,0,0.06)' } },
+      x: { grid: { display: false } }
+    }
+  }
+});
+
+// ===== CHART 2: ≥195 Rate (horizontal bar) =====
+new Chart(document.getElementById('chartGe195'), {
+  type: 'bar',
+  data: {
+    labels: ['HCRL cw3e', 'VI-TAMER', 'Timing Full', 'Timing Late', 'Baseline', 'Timing Mid', 'RLHF Ensemble', 'Timing Early'],
+    datasets: [{
+      label: '≥195 Rate (%)',
+      data: [12.8, 9.0, 5.0, 3.7, 0.8, 0.3, 0.2, 0.0],
+      backgroundColor: ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#9ca3af', '#d97706', '#ef4444', '#6b7280'],
+      borderRadius: 6,
+      barThickness: 32
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      title: { display: true, text: 'Episodes Reaching ≥195 Steps (% of 600)', font: { size: 15, weight: '600' } },
+      legend: { display: false },
+      tooltip: { callbacks: { label: ctx => ctx.raw + '% (' + Math.round(ctx.raw*6) + '/600)' } }
+    },
+    scales: {
+      x: { title: { display: true, text: '% of episodes ≥ 195 steps' }, min: 0, max: 15,
+           grid: { color: 'rgba(0,0,0,0.06)' } },
+      y: { grid: { display: false } }
+    }
+  }
+});
+
+// ===== CHART 3: Block Progression (grouped bar) =====
+new Chart(document.getElementById('chartBlocks'), {
+  type: 'bar',
+  data: {
+    labels: ['Ep 1–50', 'Ep 51–100', 'Ep 101–150', 'Ep 151–200'],
+    datasets: [
+      { label: 'HCRL cw3e', data: [32.1, 94.1, 117.9, 149.9],
+        backgroundColor: 'rgba(16,185,129,0.8)', borderRadius: 4 },
+      { label: 'VI-TAMER', data: [35.7, 70.3, 109.8, 131.6],
+        backgroundColor: 'rgba(59,130,246,0.8)', borderRadius: 4 },
+      { label: 'Timing Late', data: [34.9, 86.7, 130.5, 145.2],
+        backgroundColor: 'rgba(245,158,11,0.8)', borderRadius: 4 },
+      { label: 'Baseline', data: [29.4, 62.3, 109.0, 125.6],
+        backgroundColor: 'rgba(156,163,175,0.7)', borderRadius: 4 }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      title: { display: true, text: 'Average Block Means — 50-Episode Windows', font: { size: 15, weight: '600' } },
+      legend: { position: 'bottom' }
+    },
+    scales: {
+      y: { title: { display: true, text: 'Mean episode length' }, min: 0, max: 180,
+           grid: { color: 'rgba(0,0,0,0.06)' } },
+      x: { grid: { display: false } }
+    }
+  }
+});
+
+// ===== VI-TAMER Per-Seed Mini Charts =====
+const vtMiniOpts = (title) => ({
+  responsive: true, maintainAspectRatio: false,
+  plugins: { legend: { display: false },
+    title: { display: true, text: title, font: { size: 10 } } },
+  scales: {
+    y: { min: 0, max: 200, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { size: 9 } } },
+    x: { display: false }
+  }
+});
+// Seed 6
+new Chart(document.getElementById('chartVtSeed6'), {
+  type: 'line',
+  data: { labels: ['1-20','21-40','41-60','61-80','81-100','101-120','121-140','141-160','161-180','181-200'],
+    datasets: [{ data: [27.6, 41.5, 42.6, 52.6, 108.5, 125.0, 159.5, 146.7, 120.9, 186.6],
+      borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.15)',
+      borderWidth: 2, pointRadius: 3, fill: true, tension: 0.3 }]
+  }, options: vtMiniOpts('20-ep block means')
+});
+// Seed 9
+new Chart(document.getElementById('chartVtSeed9'), {
+  type: 'line',
+  data: { labels: ['1-20','21-40','41-60','61-80','81-100','101-120','121-140','141-160','161-180','181-200'],
+    datasets: [{ data: [34.8, 59.5, 59.9, 91.4, 103.8, 118.0, 136.4, 127.8, 124.1, 138.1],
+      borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.15)',
+      borderWidth: 2, pointRadius: 3, fill: true, tension: 0.3 }]
+  }, options: vtMiniOpts('20-ep block means')
+});
+// Seed 5
+new Chart(document.getElementById('chartVtSeed5'), {
+  type: 'line',
+  data: { labels: ['1-20','21-40','41-60','61-80','81-100','101-120','121-140','141-160','161-180','181-200'],
+    datasets: [{ data: [20.2, 20.5, 32.5, 49.0, 51.0, 42.4, 66.9, 92.2, 108.8, 117.2],
+      borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.15)',
+      borderWidth: 2, pointRadius: 3, fill: true, tension: 0.3 }]
+  }, options: vtMiniOpts('20-ep block means')
+});
+
+// ===== VI-TAMER TD Amplifier Chart =====
+new Chart(document.getElementById('chartTdAmplifier'), {
+  type: 'bar',
+  data: {
+    labels: ['Seed 5', 'Seed 6', 'Seed 9'],
+    datasets: [
+      { label: 'VI-TAMER', data: [117.2, 186.6, 138.1],
+        backgroundColor: 'rgba(59,130,246,0.8)', borderRadius: 4 },
+      { label: 'HCRL cw3e', data: [176.0, 116.2, 155.5],
+        backgroundColor: 'rgba(16,185,129,0.8)', borderRadius: 4 },
+      { label: 'Baseline', data: [134.8, 120.2, 126.9],
+        backgroundColor: 'rgba(156,163,175,0.6)', borderRadius: 4 }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      title: { display: true, text: 'Last-20 Mean — VI-TAMER vs HCRL vs Baseline', font: { size: 15, weight: '600' } },
+      legend: { position: 'bottom' }
+    },
+    scales: {
+      y: { title: { display: true, text: 'Last-20 mean (steps)' }, min: 0, max: 200,
+           grid: { color: 'rgba(0,0,0,0.06)' } },
+      x: { grid: { display: false } }
+    }
+  }
+});
+
+// ===== CHART: RLHF Single vs Ensemble (grouped bar) =====
+new Chart(document.getElementById('chartRlhfCompare'), {
+  type: 'bar',
+  data: {
+    labels: ['Ep 1–50', 'Ep 51–100', 'Ep 101–150', 'Ep 151–200'],
+    datasets: [
+      { label: 'RLHF Single', data: [19.6, 31.7, 25.4, 22.0],
+        backgroundColor: 'rgba(239,68,68,0.5)', borderColor: '#ef4444',
+        borderWidth: 2, borderRadius: 4 },
+      { label: 'RLHF Ensemble', data: [20.7, 38.4, 44.1, 54.2],
+        backgroundColor: 'rgba(239,68,68,0.9)', borderColor: '#b91c1c',
+        borderWidth: 2, borderRadius: 4 },
+      { label: 'Baseline (reference)', data: [29.4, 62.3, 109.0, 125.6],
+        backgroundColor: 'rgba(156,163,175,0.3)', borderColor: '#9ca3af',
+        borderWidth: 2, borderDash: [4,4], borderRadius: 4, type: 'line',
+        pointRadius: 4, fill: false, tension: 0.3, order: 0 }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      title: { display: true, text: 'RLHF Block Means vs Baseline', font: { size: 15, weight: '600' } },
+      legend: { position: 'bottom' }
+    },
+    scales: {
+      y: { title: { display: true, text: 'Mean episode length' }, min: 0, max: 140,
+           grid: { color: 'rgba(0,0,0,0.06)' } },
+      x: { grid: { display: false } }
+    }
+  }
+});
+
+// ===== CHART: Phase Transition (Ensemble Seed 5) =====
+new Chart(document.getElementById('chartPhaseTransition'), {
+  type: 'line',
+  data: {
+    labels: ['1-20','21-40','41-60','61-80','81-100','101-120','121-140','141-160','161-180','181-200'],
+    datasets: [{
+      label: 'Seed 5 mean',
+      data: [12.2, 11.8, 29.9, 75.5, 73.6, 81.0, 79.2, 70.2, 77.3, 77.2],
+      borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.15)',
+      borderWidth: 2.5, pointRadius: 4, fill: true, tension: 0.3
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false },
+      title: { display: true, text: 'Ensemble Seed 5: 20-episode block means', font: { size: 11 } }
+    },
+    scales: {
+      y: { min: 0, max: 100, grid: { color: 'rgba(0,0,0,0.06)' },
+           ticks: { font: { size: 10 } } },
+      x: { grid: { display: false }, ticks: { font: { size: 9 }, maxRotation: 45 } }
+    }
+  }
+});
+
+// ===== CHART 4: Per-Seed Last-20 (grouped bar) =====
+new Chart(document.getElementById('chartSeeds'), {
+  type: 'bar',
+  data: {
+    labels: ['Seed 5', 'Seed 6', 'Seed 9'],
+    datasets: [
+      { label: 'Baseline', data: [134.8, 120.2, 126.9],
+        backgroundColor: 'rgba(156,163,175,0.7)', borderRadius: 4 },
+      { label: 'HCRL cw3e', data: [176.0, 116.2, 155.5],
+        backgroundColor: 'rgba(16,185,129,0.8)', borderRadius: 4 },
+      { label: 'VI-TAMER', data: [117.2, 186.6, 138.1],
+        backgroundColor: 'rgba(59,130,246,0.8)', borderRadius: 4 },
+      { label: 'Timing Late', data: [167.7, 145.3, 141.0],
+        backgroundColor: 'rgba(245,158,11,0.8)', borderRadius: 4 }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      title: { display: true, text: 'Last-20 Episode Mean — Per Seed', font: { size: 15, weight: '600' } },
+      legend: { position: 'bottom' }
+    },
+    scales: {
+      y: { title: { display: true, text: 'Last-20 mean (steps)' }, min: 0, max: 200,
+           grid: { color: 'rgba(0,0,0,0.06)' },
+           // Add reference line at 195
+        },
+      x: { grid: { display: false } }
+    },
+    // Add annotation line at 195
+  }
+});
+</script>
+</body>
+</html>

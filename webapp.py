@@ -25,7 +25,7 @@ import pandas as pd
 from flask import Flask, Response, jsonify, request, stream_with_context
 from PIL import Image
 
-from cartpole.agents import QLearningAgent
+from cartpole.agents import QLearningAgent, VITAMERAgent
 
 app = Flask(__name__)
 app.config["PROPAGATE_EXCEPTIONS"] = True
@@ -88,14 +88,22 @@ _REWARD_MODEL_PATTERNS = re.compile(
 
 
 def _is_agent_model(npz: pathlib.Path) -> bool:
-    """Return True only if the .npz file is a QLearningAgent (has q_table key)."""
+    """Return True only if the .npz file is a playable agent (has q_table or q_h_table key)."""
     if _REWARD_MODEL_PATTERNS.search(npz.stem):
         return False
     try:
         with np.load(npz) as data:
-            return "q_table" in data
+            return "q_table" in data or "q_h_table" in data
     except Exception:
         return False
+
+
+def _load_agent(path: pathlib.Path):
+    """Load the appropriate agent type based on the model file's saved keys."""
+    with np.load(path) as data:
+        if "q_h_table" in data:
+            return VITAMERAgent.load(path)
+    return QLearningAgent.load(path)
 
 
 def scan_models() -> list[dict]:
@@ -153,10 +161,10 @@ def stream_gameplay(model_paths: list[str], num_episodes: int, fps: int):
         p = pathlib.Path(path)
         if not _is_agent_model(p):
             raise ValueError(
-                f"{p.name} is not a QLearningAgent model (missing q_table). "
+                f"{p.name} is not a playable agent model (missing q_table / q_h_table). "
                 "Reward model .npz files cannot be played in the web visualizer."
             )
-        agents.append(QLearningAgent.load(p))
+        agents.append(_load_agent(p))
         envs.append(gym.make("CartPole-v1", render_mode="rgb_array", max_episode_steps=500))
         labels.append(make_label(p))
 
@@ -272,6 +280,15 @@ def api_models():
     return jsonify(scan_models())
 
 
+@app.route("/presentation")
+def presentation():
+    from flask import send_file, abort
+    p = pathlib.Path("presentation.html")
+    if not p.exists():
+        abort(404)
+    return send_file(p, mimetype="text/html")
+
+
 @app.route("/api/play")
 def api_play():
     paths    = request.args.getlist("models")
@@ -331,6 +348,63 @@ def _csv_family(csv_path: pathlib.Path) -> str:
         rel_parent = parent
     return str(rel_parent / base).replace("\\", "/")
 
+
+# ---------------------------------------------------------------------------
+# Feedback log discovery
+# ---------------------------------------------------------------------------
+
+def _feedback_label(path: pathlib.Path) -> str:
+    """Human-readable label for a feedback log file."""
+    try:
+        rel = path.relative_to(RESULTS_DIR)
+    except ValueError:
+        rel = path
+    stem = path.stem.replace("_feedback_log", "")
+    ep = next((p for p in rel.parts if re.match(r"ep\d+$", p)), "")
+    ep_tag = f" ({ep})" if ep else ""
+    nice = _NAME_MAP.get(stem, stem.replace("_", " ").title())
+    parent = path.parent.name
+    if parent != RESULTS_DIR.name:
+        nice = f"{parent}/{nice}"
+    return nice + ep_tag
+
+
+def _find_history_for_feedback(fb_path: pathlib.Path) -> pathlib.Path | None:
+    """Return the paired *_history.csv for a feedback log, or None."""
+    hist_name = fb_path.stem.replace("_feedback_log", "") + "_history.csv"
+    hist_path = fb_path.parent / hist_name
+    return hist_path if hist_path.exists() else None
+
+
+def scan_feedback_logs() -> list[dict]:
+    """Find all *_feedback_log.csv files and return metadata."""
+    if not RESULTS_DIR.exists():
+        return []
+    logs = []
+    for p in sorted(RESULTS_DIR.rglob("*_feedback_log.csv")):
+        try:
+            df = pd.read_csv(p, nrows=2)
+            if "feedback" not in df.columns:
+                continue
+        except Exception:
+            continue
+        rel = p.relative_to(RESULTS_DIR)
+        ep = next((part for part in rel.parts if re.match(r"ep\d+$", part)), "misc")
+        category = p.parent.name if p.parent.name != RESULTS_DIR.name else "root"
+        logs.append({
+            "path":        str(p).replace("\\", "/"),
+            "label":       _feedback_label(p),
+            "ep":          ep,
+            "category":    category,
+            "group":       f"{ep} / {category}",
+            "has_history": _find_history_for_feedback(p) is not None,
+        })
+    return logs
+
+
+# ---------------------------------------------------------------------------
+# CSV discovery
+# ---------------------------------------------------------------------------
 
 def scan_csvs() -> list[dict]:
     """Find all *_history.csv files and return metadata."""
@@ -1141,6 +1215,168 @@ def api_multi_chart():
 
 
 # ---------------------------------------------------------------------------
+# Feedback analysis charts + routes
+# ---------------------------------------------------------------------------
+
+def _fb_summary(fb_df: pd.DataFrame, hist_df) -> dict:
+    """Compute summary statistics for one feedback log."""
+    total    = len(fb_df)
+    positive = int((fb_df["feedback"] == "positive").sum())
+    negative = int((fb_df["feedback"] == "negative").sum())
+    eps_fb   = int(fb_df["episode"].nunique())
+    return {
+        "total":            total,
+        "positive":         positive,
+        "negative":         negative,
+        "ratio":            round(positive / max(negative, 1), 2),
+        "eps_with_feedback": eps_fb,
+        "total_episodes":   len(hist_df) if hist_df is not None else None,
+        "avg_per_episode":  round(total / max(eps_fb, 1), 1),
+        "duration":         round(float(fb_df["timestamp"].max()), 1)
+                            if "timestamp" in fb_df.columns and total > 0 else None,
+    }
+
+
+def _fb_chart_6panel(fb_df: pd.DataFrame, hist_df, label: str) -> str:
+    """Six-panel feedback analysis figure → base64 PNG."""
+    total_eps = len(hist_df) if hist_df is not None else int(fb_df["episode"].max()) + 1
+    fb_per_ep  = fb_df.groupby("episode").size()
+    pos_per_ep = fb_df[fb_df["feedback"] == "positive"].groupby("episode").size()
+    neg_per_ep = fb_df[fb_df["feedback"] == "negative"].groupby("episode").size()
+    all_eps    = range(total_eps)
+    pos_counts = [int(pos_per_ep.get(e, 0)) for e in all_eps]
+    neg_counts = [int(neg_per_ep.get(e, 0)) for e in all_eps]
+    fb_counts  = [int(fb_per_ep.get(e, 0))  for e in all_eps]
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig.suptitle(f"Feedback Analysis — {label}", fontsize=13, fontweight="bold")
+
+    # 1. Feedback count per episode (stacked bar)
+    ax = axes[0, 0]
+    ax.bar(all_eps, pos_counts, color="green", alpha=0.7, label="Positive ↑")
+    ax.bar(all_eps, neg_counts, bottom=pos_counts, color="red", alpha=0.7, label="Negative ↓")
+    ax.set_title("Feedback Count per Episode")
+    ax.set_xlabel("Episode"); ax.set_ylabel("Feedback count")
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    # 2. Cumulative feedback over time
+    ax = axes[0, 1]
+    if "timestamp" in fb_df.columns and len(fb_df) > 0:
+        srt = fb_df.sort_values("timestamp")
+        ax.plot(srt["timestamp"], (srt["feedback"] == "positive").cumsum(),
+                color="green", linewidth=2, label="Cumulative Positive")
+        ax.plot(srt["timestamp"], (srt["feedback"] == "negative").cumsum(),
+                color="red",   linewidth=2, label="Cumulative Negative")
+    ax.set_title("Cumulative Feedback over Time")
+    ax.set_xlabel("Time (s)"); ax.set_ylabel("Cumulative count")
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    # 3. Episode length vs feedback count (scatter)
+    ax = axes[0, 2]
+    if hist_df is not None:
+        lengths = hist_df["episode_length"].values
+        has_fb  = [fb_counts[i] > 0 for i in range(len(fb_counts))]
+        no_fb   = [not b for b in has_fb]
+        if any(no_fb):
+            ax.scatter([0]*sum(no_fb),
+                       [lengths[i] for i in range(len(lengths)) if no_fb[i]],
+                       color="gray", alpha=0.35, s=18, label="No feedback")
+        if any(has_fb):
+            ax.scatter([fb_counts[i] for i in range(len(fb_counts)) if has_fb[i]],
+                       [lengths[i]   for i in range(len(lengths))   if has_fb[i]],
+                       color="steelblue", alpha=0.65, s=28, label="With feedback")
+    ax.set_title("Episode Length vs Feedback Count")
+    ax.set_xlabel("Feedback count per episode"); ax.set_ylabel("Episode length (steps)")
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    # 4. Feedback density + agent performance (dual axis)
+    ax = axes[1, 0]
+    window = 10
+    fb_s   = pd.Series(fb_counts)
+    fb_ma  = fb_s.rolling(window=window, min_periods=1).mean()
+    ax.bar(range(len(fb_s)), fb_s, color="orange", alpha=0.25)
+    ax.plot(fb_ma.index, fb_ma, color="darkorange", linewidth=2, label=f"FB MA({window})")
+    ax2 = ax.twinx()
+    if hist_df is not None:
+        ep_ma = hist_df["episode_length"].rolling(window=window, min_periods=1).mean()
+        ax2.plot(ep_ma.index, ep_ma, color="steelblue", linewidth=2, label=f"Ep Length MA({window})")
+        ax2.set_ylabel("Episode length", color="steelblue")
+        ax2.legend(loc="upper right", fontsize=8)
+    ax.set_title("Feedback Density & Agent Performance")
+    ax.set_xlabel("Episode")
+    ax.set_ylabel("Feedback count", color="darkorange")
+    ax.legend(loc="upper left", fontsize=8); ax.grid(True, alpha=0.3)
+
+    # 5. Pole angle at feedback time
+    ax = axes[1, 1]
+    if "pole_angle" in fb_df.columns:
+        bins = np.linspace(-0.25, 0.25, 25)
+        pa_pos = fb_df[fb_df["feedback"] == "positive"]["pole_angle"]
+        pa_neg = fb_df[fb_df["feedback"] == "negative"]["pole_angle"]
+        if len(pa_pos) > 0: ax.hist(pa_pos, bins=bins, alpha=0.6, color="green", label="Positive")
+        if len(pa_neg) > 0: ax.hist(pa_neg, bins=bins, alpha=0.6, color="red",   label="Negative")
+        ax.axvline(x=0, color="black", linestyle="--", alpha=0.5)
+    ax.set_title("Pole Angle at Feedback Time")
+    ax.set_xlabel("Pole Angle (rad)"); ax.set_ylabel("Count")
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    # 6. Cart position at feedback time
+    ax = axes[1, 2]
+    if "cart_position" in fb_df.columns:
+        bins = np.linspace(-2.4, 2.4, 25)
+        cp_pos = fb_df[fb_df["feedback"] == "positive"]["cart_position"]
+        cp_neg = fb_df[fb_df["feedback"] == "negative"]["cart_position"]
+        if len(cp_pos) > 0: ax.hist(cp_pos, bins=bins, alpha=0.6, color="green", label="Positive")
+        if len(cp_neg) > 0: ax.hist(cp_neg, bins=bins, alpha=0.6, color="red",   label="Negative")
+        ax.axvline(x=0, color="black", linestyle="--", alpha=0.5)
+    ax.set_title("Cart Position at Feedback Time")
+    ax.set_xlabel("Cart Position"); ax.set_ylabel("Count")
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    return _fig_to_base64(fig)
+
+
+@app.route("/api/feedback-logs")
+def api_feedback_logs():
+    return jsonify(scan_feedback_logs())
+
+
+@app.route("/api/feedback-analysis", methods=["POST"])
+def api_feedback_analysis():
+    """Analyse one or more feedback log CSVs; return summary + 6-panel chart per log."""
+    data  = request.get_json(force=True)
+    paths = data.get("paths", [])
+    if not paths:
+        return jsonify({"error": "No feedback logs selected"}), 400
+
+    results = []
+    for path_str in paths:
+        p = pathlib.Path(path_str)
+        if not p.exists():
+            results.append({"path": path_str, "error": "File not found"})
+            continue
+        try:
+            fb_df = pd.read_csv(p)
+            if "feedback" not in fb_df.columns:
+                results.append({"path": path_str, "error": "Not a feedback log"})
+                continue
+            hist_path = _find_history_for_feedback(p)
+            hist_df   = pd.read_csv(hist_path) if hist_path else None
+            lbl       = _feedback_label(p)
+            results.append({
+                "path":    path_str,
+                "label":   lbl,
+                "summary": _fb_summary(fb_df, hist_df),
+                "chart":   _fb_chart_6panel(fb_df, hist_df, lbl),
+            })
+        except Exception as exc:
+            results.append({"path": path_str, "error": str(exc)})
+
+    return jsonify({"results": results})
+
+
+# ---------------------------------------------------------------------------
 # Single-file HTML / CSS / JS frontend
 # ---------------------------------------------------------------------------
 
@@ -1524,6 +1760,12 @@ tr:last-child td { border-bottom: none; }
   <button class="tab-btn" onclick="switchTab('charts')" id="tabCharts">
     <span class="tab-icon">📊</span> Charts
   </button>
+  <button class="tab-btn" onclick="switchTab('feedback')" id="tabFeedback">
+    <span class="tab-icon">💬</span> Feedback
+  </button>
+  <button class="tab-btn" onclick="switchTab('data')" id="tabData">
+    <span class="tab-icon">📑</span> Data
+  </button>
 </nav>
 
 <!-- ══════════════════════════════════════════════════════════════ -->
@@ -1647,6 +1889,53 @@ tr:last-child td { border-bottom: none; }
   </div>
 </div>
 
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- TAB 4: DATA (Reveal.js presentation)                           -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div class="tab-page" id="pageData" style="flex-direction:column;overflow:hidden">
+  <iframe id="presentationFrame" src="" style="flex:1;width:100%;border:none;display:block"></iframe>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- TAB 3: FEEDBACK (human feedback analysis)                      -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div class="layout tab-page" id="pageFeedback">
+
+  <!-- ── Feedback sidebar ── -->
+  <aside class="chart-sidebar">
+    <div class="sb-title">Select Feedback Logs</div>
+    <div class="model-list" id="fbList">
+      <div class="no-models">Loading…</div>
+    </div>
+    <div class="csv-count">
+      <span id="fbCountTxt">0 selected</span>
+      <a onclick="toggleAllFb()" style="cursor:pointer;color:var(--accent);font-size:.72rem">Select All</a>
+    </div>
+    <div class="chart-controls" style="padding-top:8px">
+      <button class="btn btn-play" id="fbBtn" onclick="generateFeedbackAnalysis()">💬 Analyse</button>
+    </div>
+  </aside>
+
+  <!-- ── Feedback main area ── -->
+  <div class="chart-main">
+
+    <!-- Summary stats table (filled by JS) -->
+    <div id="fbSummaryPanel" style="display:none;padding:16px 20px 0">
+      <div style="font-weight:600;font-size:.9rem;margin-bottom:8px;color:var(--text)">Summary Statistics</div>
+      <div id="fbSummaryTable"></div>
+    </div>
+
+    <!-- Chart grid -->
+    <div class="chart-display" id="fbDisplay">
+      <div class="hint">
+        <div class="hint-icon">💬</div>
+        <div>Select feedback log(s) from the sidebar,<br>then click <strong>Analyse</strong>.</div>
+      </div>
+    </div>
+    <div class="chart-status" id="fbStatus">Ready</div>
+  </div>
+</div>
+
 <script>
 /* ══════════════════════════════════════════════════════════════════
    TAB SWITCHING
@@ -1657,10 +1946,19 @@ function switchTab(tab) {
   if (tab === 'play') {
     document.getElementById('tabPlay').classList.add('active');
     document.getElementById('pagePlay').classList.add('active');
-  } else {
+  } else if (tab === 'charts') {
     document.getElementById('tabCharts').classList.add('active');
     document.getElementById('pageCharts').classList.add('active');
     if (!chartsLoaded) loadCsvList();
+  } else if (tab === 'feedback') {
+    document.getElementById('tabFeedback').classList.add('active');
+    document.getElementById('pageFeedback').classList.add('active');
+    if (!fbLoaded) loadFeedbackLogs();
+  } else {
+    document.getElementById('tabData').classList.add('active');
+    document.getElementById('pageData').classList.add('active');
+    const fr = document.getElementById('presentationFrame');
+    if (!fr.src || fr.src === window.location.href) fr.src = '/presentation';
   }
 }
 
@@ -2134,6 +2432,139 @@ function generateSelectedCharts() {
   .catch(err => {
     btn.disabled = false;
     btn.innerHTML = '📊 Generate Charts';
+    status.textContent = 'Error: ' + err.message;
+    display.innerHTML = `<div class="hint"><div class="hint-icon">⚠️</div><div>Request failed</div></div>`;
+  });
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   FEEDBACK TAB
+   ══════════════════════════════════════════════════════════════════ */
+let fbLoaded   = false;
+let fbSelected = new Set();
+
+function loadFeedbackLogs() {
+  fbLoaded = true;
+  fetch('/api/feedback-logs')
+    .then(r => r.json())
+    .then(logs => renderFbSidebar(logs));
+}
+
+function renderFbSidebar(logs) {
+  const list = document.getElementById('fbList');
+  if (!logs.length) {
+    list.innerHTML = '<div class="no-models">No feedback logs found.<br>Run HCRL training first.</div>';
+    return;
+  }
+  const tree = {};
+  for (const l of logs) {
+    if (!tree[l.group]) tree[l.group] = [];
+    tree[l.group].push(l);
+  }
+  let html = '';
+  for (const [group, items] of Object.entries(tree)) {
+    html += `<div class="grp-hdr">${esc(group)}</div>`;
+    for (const l of items) {
+      const warn = l.has_history ? '' : ' <span title="No paired history CSV" style="color:var(--muted);font-size:.7rem">⚠ no history</span>';
+      html += `
+        <label class="model-item">
+          <input type="checkbox" value="${esc(l.path)}" onchange="onFbToggle(this)">
+          <span>${esc(l.label)}${warn}</span>
+        </label>`;
+    }
+  }
+  list.innerHTML = html;
+}
+
+function onFbToggle(cb) {
+  cb.checked ? fbSelected.add(cb.value) : fbSelected.delete(cb.value);
+  document.getElementById('fbCountTxt').textContent = fbSelected.size + ' selected';
+}
+
+function toggleAllFb() {
+  const cbs = document.querySelectorAll('#fbList input[type=checkbox]');
+  const allChecked = fbSelected.size === cbs.length;
+  cbs.forEach(cb => {
+    cb.checked = !allChecked;
+    !allChecked ? fbSelected.add(cb.value) : fbSelected.delete(cb.value);
+  });
+  document.getElementById('fbCountTxt').textContent = fbSelected.size + ' selected';
+}
+
+function generateFeedbackAnalysis() {
+  if (!fbSelected.size) { alert('Select at least one feedback log.'); return; }
+  const btn     = document.getElementById('fbBtn');
+  const display = document.getElementById('fbDisplay');
+  const status  = document.getElementById('fbStatus');
+  const summary = document.getElementById('fbSummaryPanel');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Analysing…';
+  status.textContent = 'Analysing…';
+  display.innerHTML = '<div class="hint"><div class="spinner" style="width:32px;height:32px;border-width:3px"></div><div>Generating charts…</div></div>';
+  summary.style.display = 'none';
+
+  fetch('/api/feedback-analysis', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths: [...fbSelected] }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    btn.disabled = false;
+    btn.innerHTML = '💬 Analyse';
+    if (data.error) {
+      status.textContent = 'Error: ' + data.error;
+      display.innerHTML = `<div class="hint"><div class="hint-icon">⚠️</div><div>${esc(data.error)}</div></div>`;
+      return;
+    }
+    const results = data.results || [];
+    const ok = results.filter(r => !r.error);
+    status.textContent = `Done — ${ok.length} / ${results.length} analysed`;
+
+    // Summary stats table
+    if (ok.length) {
+      summary.style.display = '';
+      let th = '<tr><th>Log</th><th>Total FB</th><th>Positive</th><th>Negative</th><th>Ratio (+/−)</th><th>Episodes w/ FB</th><th>Avg FB/ep</th><th>Duration (s)</th></tr>';
+      let rows = ok.map(r => {
+        const s = r.summary;
+        return `<tr>
+          <td><strong>${esc(r.label)}</strong></td>
+          <td>${s.total}</td>
+          <td>${s.positive} <span style="color:green">(${s.total ? (s.positive/s.total*100).toFixed(0) : 0}%)</span></td>
+          <td>${s.negative} <span style="color:red">(${s.total ? (s.negative/s.total*100).toFixed(0) : 0}%)</span></td>
+          <td>${s.ratio}</td>
+          <td>${s.eps_with_feedback}${s.total_episodes ? ' / ' + s.total_episodes : ''}</td>
+          <td>${s.avg_per_episode}</td>
+          <td>${s.duration !== null ? s.duration : '—'}</td>
+        </tr>`;
+      }).join('');
+      document.getElementById('fbSummaryTable').innerHTML =
+        `<table style="width:100%;border-collapse:collapse;font-size:.78rem">
+           <thead style="background:var(--bg)">${th}</thead>
+           <tbody>${rows}</tbody>
+         </table>`;
+    }
+
+    // Charts
+    const useCols2 = ok.length >= 2;
+    let html = `<div class="chart-grid${useCols2 ? ' cols-2' : ''}">`;
+    for (const r of results) {
+      if (r.error) {
+        html += `<div class="chart-card"><div class="chart-card-head">${esc(r.path.split('/').pop())}</div>
+                 <div class="chart-error">⚠️ ${esc(r.error)}</div></div>`;
+      } else {
+        html += `<div class="chart-card">
+                   <div class="chart-card-head">${esc(r.label)}</div>
+                   <img src="data:image/png;base64,${r.chart}" alt="${esc(r.label)}">
+                 </div>`;
+      }
+    }
+    html += '</div>';
+    display.innerHTML = html;
+  })
+  .catch(err => {
+    btn.disabled = false;
+    btn.innerHTML = '💬 Analyse';
     status.textContent = 'Error: ' + err.message;
     display.innerHTML = `<div class="hint"><div class="hint-icon">⚠️</div><div>Request failed</div></div>`;
   });
